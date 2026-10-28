@@ -23,3 +23,12 @@ ENVIRONMENT=demo
 # Wikidata (la wiki que ya usa el Channel GT). No requiere key.
 # WIKIDATA_API_URL=https://www.wikidata.org/w/api.php
 # WIKIDATA_LANGUAGE=es
+
+# OpenRouter (modelos free con salida de texto).
+# Sin key, callOpenRouter devuelve missing_api_key.
+# OPENROUTER_API_KEY=sk-or-v1-...
+# OPENROUTER_MODEL=
+# OPENROUTER_MODELS=
+# OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+# OPENROUTER_SITE_URL=https://consta.example
+# OPENROUTER_APP_NAME=Consta

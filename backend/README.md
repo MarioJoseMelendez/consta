@@ -155,6 +155,19 @@ Opciones: `limit`, `language` (solo Wikidata), `timeoutMs`; en Tavily también
 pide `raw_content` en Markdown. Timeout por defecto: 10 s. Sin key,
 `searchTavily` devuelve `missing_api_key` sin lanzar.
 
+### `callOpenRouter`
+
+`callOpenRouter(env, messages, options?)` llama a OpenRouter y prueba modelos
+free que declaran salida de texto. Si `/models` responde, filtra por `:free` y
+`output_modalities` con `text`; si no, usa una lista de respaldo. Reintenta
+429, 5xx, timeout y errores de red; descarta los modelos que devuelven contenido
+vacío y pasa al siguiente.
+
+Devuelve `{ ok, text, model, usage?, attempts, error? }`. No lanza.
+
+Opciones: `models`, `temperature`, `maxTokens`, `timeoutMs`, `retries` y
+`retryDelayMs`.
+
 ## Variables de entorno
 
 | Variable | Uso | Default |
@@ -168,6 +181,12 @@ pide `raw_content` en Markdown. Timeout por defecto: 10 s. Sin key,
 | `TAVILY_INCLUDE_RAW_CONTENT` | Pide el contenido completo en la búsqueda. | `true`. |
 | `WIKIDATA_API_URL` | Endpoint de la API de Wikidata. | `https://www.wikidata.org/w/api.php`. |
 | `WIKIDATA_LANGUAGE` | Idioma de búsqueda en Wikidata. | `es`. |
+| `OPENROUTER_API_KEY` | API key server-side de OpenRouter. | Vacío: `callOpenRouter` devuelve `missing_api_key`. |
+| `OPENROUTER_BASE_URL` | Base de OpenRouter. | `https://openrouter.ai/api/v1`. |
+| `OPENROUTER_MODEL` | Modelo preferido; se prueba primero. | Vacío. |
+| `OPENROUTER_MODELS` | Lista separada por comas; reemplaza el descubrimiento. | Vacío. |
+| `OPENROUTER_SITE_URL` | `HTTP-Referer` para OpenRouter. | Vacío. |
+| `OPENROUTER_APP_NAME` | `X-Title` para OpenRouter. | Vacío. |
 
 Copia `.dev.vars.example` a `.dev.vars` para desarrollo local. `.dev.vars` está
 ignorado por git.

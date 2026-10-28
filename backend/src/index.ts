@@ -27,6 +27,12 @@ interface Bindings {
   TAVILY_INCLUDE_RAW_CONTENT?: string;
   WIKIDATA_API_URL?: string;
   WIKIDATA_LANGUAGE?: string;
+  OPENROUTER_API_KEY?: string;
+  OPENROUTER_BASE_URL?: string;
+  OPENROUTER_MODEL?: string;
+  OPENROUTER_MODELS?: string;
+  OPENROUTER_SITE_URL?: string;
+  OPENROUTER_APP_NAME?: string;
 }
 
 type AppContext = Context<{ Bindings: Bindings }>;

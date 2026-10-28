@@ -5,6 +5,7 @@
  * - Wikidata (la wiki que ya usa el Channel GT).
  * - Tavily (búsqueda web + contenido extraído).
  *
+ * `callOpenRouter` centraliza las llamadas a modelos free con salida de texto.
  * Ninguna función lanza excepciones: devuelven `{ ok, ... }` con error tipado.
  * Las API keys viven solo server-side.
  */
@@ -16,6 +17,12 @@ export interface GeneralEnv {
   TAVILY_INCLUDE_RAW_CONTENT?: string;
   WIKIDATA_API_URL?: string;
   WIKIDATA_LANGUAGE?: string;
+  OPENROUTER_API_KEY?: string;
+  OPENROUTER_BASE_URL?: string;
+  OPENROUTER_MODEL?: string;
+  OPENROUTER_MODELS?: string;
+  OPENROUTER_SITE_URL?: string;
+  OPENROUTER_APP_NAME?: string;
 }
 
 export interface GeneralError {
@@ -69,6 +76,46 @@ export interface GeneralSearchOptions {
   topic?: TavilyTopic;
 }
 
+export interface OpenRouterMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
+export interface OpenRouterAttempt {
+  model: string;
+  attempt: number;
+  status?: number;
+  code?: string;
+  message?: string;
+}
+
+export interface OpenRouterUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+export interface OpenRouterResult {
+  ok: boolean;
+  text: string;
+  model: string | null;
+  usage?: OpenRouterUsage;
+  attempts: OpenRouterAttempt[];
+  error?: GeneralError;
+}
+
+export interface OpenRouterOptions {
+  /** Modelos a probar, en orden. Si se omite, usa free con salida de texto. */
+  models?: string[];
+  temperature?: number;
+  maxTokens?: number;
+  timeoutMs?: number;
+  /** Reintentos por modelo en errores transitorios. Default: 1. */
+  retries?: number;
+  /** Espera base entre reintentos. Default: 400 ms. */
+  retryDelayMs?: number;
+}
+
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_BYTES = 8_000_000;
 const MAX_QUERY_LENGTH = 400;
@@ -79,6 +126,24 @@ const TAVILY_BASE_URL = "https://api.tavily.com";
 const TAVILY_DEFAULT_DEPTH: TavilySearchDepth = "basic";
 const WIKIDATA_API_URL = "https://www.wikidata.org/w/api.php";
 const WIKIDATA_LICENSE = "CC0-1.0";
+
+const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+const OPENROUTER_DEFAULT_TIMEOUT_MS = 30_000;
+const OPENROUTER_DEFAULT_RETRIES = 1;
+const OPENROUTER_DEFAULT_RETRY_DELAY_MS = 400;
+const OPENROUTER_DEFAULT_TEMPERATURE = 0.2;
+const OPENROUTER_DEFAULT_MAX_TOKENS = 1200;
+const OPENROUTER_MAX_MODELS = 8;
+const OPENROUTER_MODEL_CACHE_TTL_MS = 10 * 60 * 1000;
+
+/** Modelos free de respaldo si `/models` no responde. */
+export const PREFERRED_FREE_TEXT_MODELS: readonly string[] = [
+  "nvidia/nemotron-3-super-120b-a12b:free",
+  "google/gemma-4-31b-it:free",
+  "nvidia/nemotron-3.5-lightning:free",
+  "thinkingmachines/inkling:free",
+  "openrouter/free",
+];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -254,9 +319,199 @@ function readBoolean(value: string | undefined, fallback: boolean): boolean {
   return fallback;
 }
 
-function tavilyEndpoint(baseUrl: string): URL {
+function joinEndpoint(baseUrl: string, path: string): URL {
   const trimmed = baseUrl.replace(/\/+$/, "");
-  return new URL(trimmed.endsWith("/search") ? trimmed : `${trimmed}/search`);
+  return new URL(trimmed.endsWith(path) ? trimmed : `${trimmed}${path}`);
+}
+
+function dedupeModels(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of values) {
+    const id = value.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    result.push(id);
+  }
+
+  return result;
+}
+
+function readModelList(value: string | undefined): string[] {
+  return dedupeModels((value ?? "").split(","));
+}
+
+function normalizeInteger(
+  value: number | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(value)));
+}
+
+function sleep(ms: number): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isFreeTextModel(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+
+  const id = typeof value.id === "string" ? value.id.trim() : "";
+  if (!id.endsWith(":free")) return null;
+
+  const architecture = isRecord(value.architecture) ? value.architecture : null;
+  if (!architecture) return null;
+
+  const output = Array.isArray(architecture.output_modalities)
+    ? architecture.output_modalities.filter((item): item is string => typeof item === "string")
+    : [];
+  if (!output.includes("text")) return null;
+
+  const input = Array.isArray(architecture.input_modalities)
+    ? architecture.input_modalities.filter((item): item is string => typeof item === "string")
+    : [];
+  if (input.length > 0 && !input.includes("text")) return null;
+
+  return id;
+}
+
+interface FreeTextModelCache {
+  at: number;
+  baseUrl: string;
+  ids: string[];
+}
+
+let freeTextModelCache: FreeTextModelCache | null = null;
+
+async function discoverFreeTextModels(
+  env: GeneralEnv,
+  timeoutMs: number,
+): Promise<string[]> {
+  const baseUrl = env.OPENROUTER_BASE_URL?.trim() || OPENROUTER_BASE_URL;
+  const now = Date.now();
+
+  if (
+    freeTextModelCache &&
+    freeTextModelCache.baseUrl === baseUrl &&
+    now - freeTextModelCache.at < OPENROUTER_MODEL_CACHE_TTL_MS
+  ) {
+    return freeTextModelCache.ids;
+  }
+
+  let url: URL;
+  try {
+    url = joinEndpoint(baseUrl, "/models");
+  } catch {
+    return [];
+  }
+
+  const response = await fetchJson(
+    url.toString(),
+    { headers: { Accept: "application/json" } },
+    timeoutMs,
+  );
+  if (!response.ok) return [];
+
+  const payload = response.payload;
+  const data =
+    isRecord(payload) && Array.isArray(payload.data) ? payload.data : [];
+
+  const ids: string[] = [];
+  for (const entry of data) {
+    const id = isFreeTextModel(entry);
+    if (id) ids.push(id);
+  }
+
+  const preferred = PREFERRED_FREE_TEXT_MODELS.filter((id) => ids.includes(id));
+  const rest = ids.filter((id) => !preferred.includes(id));
+  const ordered = dedupeModels([...preferred, ...rest]).slice(
+    0,
+    OPENROUTER_MAX_MODELS,
+  );
+
+  freeTextModelCache = { at: now, baseUrl, ids: ordered };
+  return ordered;
+}
+
+async function resolveOpenRouterModels(
+  env: GeneralEnv,
+  options: OpenRouterOptions,
+  timeoutMs: number,
+): Promise<string[]> {
+  const explicit = options.models?.length
+    ? options.models
+    : readModelList(env.OPENROUTER_MODELS);
+  if (explicit.length > 0) return dedupeModels(explicit).slice(0, OPENROUTER_MAX_MODELS);
+
+  const preferred = env.OPENROUTER_MODEL?.trim();
+  const discovered = await discoverFreeTextModels(env, timeoutMs);
+  const base =
+    discovered.length > 0
+      ? discovered
+      : [...PREFERRED_FREE_TEXT_MODELS];
+
+  return dedupeModels(preferred ? [preferred, ...base] : base).slice(
+    0,
+    OPENROUTER_MAX_MODELS,
+  );
+}
+
+function extractOpenRouterText(payload: unknown): string {
+  if (!isRecord(payload)) return "";
+
+  const choices = Array.isArray(payload.choices) ? payload.choices : [];
+  for (const choice of choices) {
+    if (!isRecord(choice)) continue;
+
+    const message = isRecord(choice.message) ? choice.message : null;
+    if (!message) continue;
+
+    const content = message.content;
+    if (typeof content === "string" && content.trim()) {
+      return content.trim();
+    }
+
+    if (Array.isArray(content)) {
+      const text = content
+        .map((part) =>
+          isRecord(part) && typeof part.text === "string" ? part.text : "",
+        )
+        .join("")
+        .trim();
+      if (text) return text;
+    }
+  }
+
+  return "";
+}
+
+function extractOpenRouterUsage(payload: unknown): OpenRouterUsage | undefined {
+  if (!isRecord(payload) || !isRecord(payload.usage)) return undefined;
+
+  const prompt = payload.usage.prompt_tokens;
+  const completion = payload.usage.completion_tokens;
+  const total = payload.usage.total_tokens;
+  if (
+    typeof prompt !== "number" &&
+    typeof completion !== "number" &&
+    typeof total !== "number"
+  ) {
+    return undefined;
+  }
+
+  const promptTokens = typeof prompt === "number" ? prompt : 0;
+  const completionTokens = typeof completion === "number" ? completion : 0;
+
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens:
+      typeof total === "number" ? total : promptTokens + completionTokens,
+  };
 }
 
 /**
@@ -381,7 +636,7 @@ export async function searchTavily(
   const baseUrl = env.TAVILY_BASE_URL?.trim() || TAVILY_BASE_URL;
   let url: URL;
   try {
-    url = tavilyEndpoint(baseUrl);
+    url = joinEndpoint(baseUrl, "/search");
   } catch {
     return failure(source, q, retrievedAt, {
       code: "invalid_config",
@@ -470,4 +725,211 @@ export async function searchTavily(
   }
 
   return { ok: true, source, query: q, items, retrievedAt };
+}
+
+/**
+ * Llama a OpenRouter con fallback entre modelos free que declaran salida de
+ * texto. Si un modelo no devuelve texto, se descarta y se pasa al siguiente.
+ * Solo reintenta errores transitorios (429, 5xx, timeout o red).
+ */
+export async function callOpenRouter(
+  env: GeneralEnv,
+  messages: OpenRouterMessage[],
+  options: OpenRouterOptions = {},
+): Promise<OpenRouterResult> {
+  const attempts: OpenRouterAttempt[] = [];
+
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return {
+      ok: false,
+      text: "",
+      model: null,
+      attempts,
+      error: {
+        code: "invalid_messages",
+        message: "Se requiere al menos un mensaje.",
+      },
+    };
+  }
+
+  const apiKey = env.OPENROUTER_API_KEY?.trim();
+  if (!apiKey) {
+    return {
+      ok: false,
+      text: "",
+      model: null,
+      attempts,
+      error: {
+        code: "missing_api_key",
+        message: "Falta OPENROUTER_API_KEY en el entorno del analyzer.",
+      },
+    };
+  }
+
+  const baseUrl = env.OPENROUTER_BASE_URL?.trim() || OPENROUTER_BASE_URL;
+  let url: URL;
+  try {
+    url = joinEndpoint(baseUrl, "/chat/completions");
+  } catch {
+    return {
+      ok: false,
+      text: "",
+      model: null,
+      attempts,
+      error: {
+        code: "invalid_config",
+        message: "OPENROUTER_BASE_URL no es una URL válida.",
+      },
+    };
+  }
+
+  const timeoutMs = normalizeInteger(
+    options.timeoutMs,
+    OPENROUTER_DEFAULT_TIMEOUT_MS,
+    100,
+    120_000,
+  );
+  const retries = normalizeInteger(
+    options.retries,
+    OPENROUTER_DEFAULT_RETRIES,
+    0,
+    5,
+  );
+  const retryDelayMs = normalizeInteger(
+    options.retryDelayMs,
+    OPENROUTER_DEFAULT_RETRY_DELAY_MS,
+    0,
+    10_000,
+  );
+  const temperature =
+    typeof options.temperature === "number" && Number.isFinite(options.temperature)
+      ? Math.min(2, Math.max(0, options.temperature))
+      : OPENROUTER_DEFAULT_TEMPERATURE;
+  const maxTokens = normalizeInteger(
+    options.maxTokens,
+    OPENROUTER_DEFAULT_MAX_TOKENS,
+    1,
+    32_000,
+  );
+
+  const models = await resolveOpenRouterModels(env, options, timeoutMs);
+  if (models.length === 0) {
+    return {
+      ok: false,
+      text: "",
+      model: null,
+      attempts,
+      error: {
+        code: "no_models",
+        message: "No hay modelos free con salida de texto disponibles.",
+      },
+    };
+  }
+
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${apiKey}`,
+  };
+  if (env.OPENROUTER_SITE_URL?.trim()) {
+    headers["HTTP-Referer"] = env.OPENROUTER_SITE_URL.trim();
+  }
+  if (env.OPENROUTER_APP_NAME?.trim()) {
+    headers["X-Title"] = env.OPENROUTER_APP_NAME.trim();
+  }
+
+  let lastError: GeneralError | undefined;
+
+  for (const model of models) {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      const response = await fetchJson(
+        url.toString(),
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            model,
+            messages,
+            temperature,
+            max_tokens: maxTokens,
+            stream: false,
+          }),
+        },
+        timeoutMs,
+      );
+
+      if (!response.ok) {
+        const error = response.error;
+        attempts.push({
+          model,
+          attempt: attempt + 1,
+          ...(error.status !== undefined ? { status: error.status } : {}),
+          code: error.code,
+          message: error.message,
+        });
+        lastError = error;
+
+        if (error.code === "unauthorized") {
+          return { ok: false, text: "", model: null, attempts, error };
+        }
+
+        if (!error.retryable || attempt === retries) break;
+        await sleep(retryDelayMs * 2 ** attempt);
+        continue;
+      }
+
+      const payload = response.payload;
+      if (isRecord(payload) && payload.error !== undefined) {
+        const error: GeneralError = {
+          code: "provider_error",
+          message: providerMessage(payload, `OpenRouter rechazó el modelo ${model}.`),
+        };
+        attempts.push({
+          model,
+          attempt: attempt + 1,
+          code: error.code,
+          message: error.message,
+        });
+        lastError = error;
+        break;
+      }
+
+      const text = extractOpenRouterText(payload);
+      if (!text) {
+        const error: GeneralError = {
+          code: "empty_text",
+          message: `El modelo ${model} no devolvió texto.`,
+        };
+        attempts.push({
+          model,
+          attempt: attempt + 1,
+          code: error.code,
+          message: error.message,
+        });
+        lastError = error;
+        break;
+      }
+
+      const usage = extractOpenRouterUsage(payload);
+      return {
+        ok: true,
+        text,
+        model,
+        ...(usage ? { usage } : {}),
+        attempts,
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    text: "",
+    model: null,
+    attempts,
+    error:
+      lastError ?? {
+        code: "no_text_response",
+        message: "Ningún modelo free devolvió texto.",
+      },
+  };
 }
