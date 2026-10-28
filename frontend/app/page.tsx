@@ -17,7 +17,9 @@ import {
   IconLink,
   IconShield,
 } from "@/components/Icons";
-import SearchForm from "@/components/SearchForm";
+import IdentityForm from "@/components/identity/IdentityForm";
+import IdentityPanel from "@/components/identity/IdentityPanel";
+import IdentityProvider from "@/components/identity/IdentityProvider";
 import StatusBadge from "@/components/StatusBadge";
 import { formatNumber, formatPercent } from "@/lib/format";
 
@@ -79,6 +81,7 @@ export default function HomePage() {
 
   return (
     <div className="landing">
+      <IdentityProvider>
       <section className="shell hero" aria-labelledby="hero-title">
         <div className="hero-copy">
           <p className="eyebrow">
@@ -96,7 +99,7 @@ export default function HomePage() {
             Cada conexión conserva su fuente, su fecha y su licencia.
           </p>
 
-          <SearchForm placeholder="Busca una empresa, una persona o un NIT…" />
+          <IdentityForm />
 
           <div className="hero-examples">
             <span>Prueba con</span>
@@ -166,6 +169,8 @@ export default function HomePage() {
           </div>
         </aside>
       </section>
+      <IdentityPanel />
+      </IdentityProvider>
 
       <section className="shell stats-section" aria-labelledby="stats-title">
         <div className="stats-head">

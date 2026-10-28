@@ -5008,3 +5008,395 @@ code {
     scroll-behavior: auto !important;
   }
 }
+
+/* --------------------------------------------------------------------------
+   Identity — home investigation
+   -------------------------------------------------------------------------- */
+
+.identity-form {
+  display: grid;
+  gap: 0.75rem;
+  width: 100%;
+  max-width: 620px;
+  margin-top: 2.2rem;
+  padding: 0.9rem;
+  border: 1px solid var(--paper);
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 7px 7px 0 rgba(0, 0, 0, 0.24);
+  animation: fadeUp 0.8s 0.16s ease both;
+}
+
+.identity-field {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.identity-field label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  font-family: var(--mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(18, 23, 20, 0.62);
+}
+
+.identity-field label span {
+  letter-spacing: 0.08em;
+  text-transform: none;
+  color: rgba(18, 23, 20, 0.45);
+}
+
+.identity-name {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.45rem;
+  border-bottom: 1px solid rgba(18, 23, 20, 0.2);
+}
+
+.identity-name svg {
+  color: rgba(18, 23, 20, 0.5);
+}
+
+.identity-form input,
+.identity-form textarea {
+  width: 100%;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+}
+
+.identity-form input {
+  min-width: 0;
+  padding: 0.45rem 0;
+  font-family: var(--display);
+  font-size: clamp(1.08rem, 1.6vw, 1.35rem);
+  line-height: 1.2;
+}
+
+.identity-form textarea {
+  min-height: 4.6rem;
+  padding: 0.55rem 0.65rem;
+  resize: vertical;
+  border: 1px solid rgba(18, 23, 20, 0.16);
+  background: rgba(18, 23, 20, 0.03);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.identity-form input::placeholder,
+.identity-form textarea::placeholder {
+  color: rgba(18, 23, 20, 0.42);
+}
+
+.identity-form input:disabled,
+.identity-form textarea:disabled {
+  opacity: 0.7;
+}
+
+.identity-submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+  justify-self: end;
+  min-height: 46px;
+  padding: 0.75rem 0.95rem;
+  border: 0;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--mono);
+  font-size: 0.58rem;
+  font-weight: 500;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.identity-submit:hover:not(:disabled) {
+  background: var(--lime);
+  color: var(--ink);
+}
+
+.identity-submit:disabled {
+  cursor: progress;
+  opacity: 0.72;
+}
+
+.identity-panel {
+  padding-bottom: clamp(3.5rem, 7vw, 6rem);
+}
+
+.identity-head h2 {
+  margin-top: 0.8rem;
+  max-width: 16ch;
+  font-family: var(--display);
+  font-size: clamp(2.4rem, 5vw, 4.2rem);
+  font-weight: 400;
+  line-height: 0.92;
+  letter-spacing: -0.045em;
+}
+
+.identity-status,
+.identity-error {
+  max-width: 42rem;
+  margin-top: 1rem;
+  color: var(--muted-strong);
+}
+
+.identity-error {
+  color: var(--orange);
+}
+
+.identity-candidates {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 1.6rem;
+}
+
+.identity-candidate {
+  display: grid;
+  gap: 0.85rem;
+  height: 100%;
+  padding: 1rem 1rem 0.9rem;
+  border: 1px solid rgba(18, 23, 20, 0.16);
+  background: var(--paper);
+  color: var(--paper-ink);
+  box-shadow: 8px 8px 0 rgba(0, 0, 0, 0.22);
+}
+
+.identity-candidate.is-selected {
+  outline: 2px solid var(--lime);
+  outline-offset: 3px;
+}
+
+.identity-candidate h3,
+.identity-profile-head h3,
+.identity-round h3 {
+  font-family: var(--display);
+  font-weight: 400;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+.identity-candidate h3 {
+  font-size: clamp(1.45rem, 2vw, 1.9rem);
+}
+
+.identity-candidate dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem 0.9rem;
+}
+
+.identity-candidate dt,
+.identity-field-card .mono-label {
+  font-family: var(--mono);
+  font-size: 0.52rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--paper-muted);
+}
+
+.identity-candidate dd,
+.identity-value {
+  margin: 0.2rem 0 0;
+  font-size: 0.98rem;
+  line-height: 1.35;
+}
+
+.identity-candidate p,
+.identity-field-card p {
+  color: var(--paper-ink);
+}
+
+.identity-candidate > p,
+.identity-missing {
+  color: rgba(18, 23, 20, 0.72);
+  font-size: 0.92rem;
+}
+
+.identity-sources {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.identity-sources li,
+.identity-search li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.35rem 0.55rem;
+  align-items: baseline;
+}
+
+.identity-sources span,
+.identity-search li > span {
+  font-family: var(--mono);
+  font-size: 0.52rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--lime-dark);
+}
+
+.identity-candidate .identity-sources a,
+.identity-field-card .identity-sources a {
+  color: var(--paper-ink);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.identity-candidate button {
+  justify-self: start;
+  min-height: 40px;
+  padding: 0.65rem 0.8rem;
+  border: 0;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.identity-candidate button[aria-pressed="true"],
+.identity-candidate button:hover {
+  background: var(--lime);
+  color: var(--ink);
+}
+
+.identity-profile {
+  margin-top: 1.8rem;
+}
+
+.identity-profile-head h3 {
+  margin-top: 0.45rem;
+  font-size: clamp(2rem, 4vw, 3rem);
+  color: var(--paper);
+}
+
+.identity-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin-top: 1rem;
+}
+
+.identity-field-card {
+  display: grid;
+  align-content: start;
+  gap: 0.35rem;
+  min-height: 9.5rem;
+  padding: 0.9rem;
+  background: var(--paper);
+  color: var(--paper-ink);
+  box-shadow: 6px 6px 0 rgba(0, 0, 0, 0.18);
+}
+
+.identity-value {
+  font-family: var(--display);
+  font-size: 1.25rem;
+  line-height: 1.15;
+}
+
+.identity-field-status {
+  font-family: var(--mono);
+  font-size: 0.52rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.identity-field-status[data-status="found"] {
+  color: var(--lime-dark);
+}
+
+.identity-field-status[data-status="alleged"],
+.identity-field-status[data-status="conflicting"] {
+  color: var(--orange);
+}
+
+.identity-field-status[data-status="not_found"] {
+  color: var(--paper-muted);
+}
+
+.identity-trace {
+  margin-top: 1.8rem;
+  border-top: 1px solid var(--line);
+  padding-top: 1rem;
+}
+
+.identity-trace summary {
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--lime);
+}
+
+.identity-trace > p,
+.identity-round,
+.identity-search {
+  margin-top: 1rem;
+}
+
+.identity-trace ol {
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 1rem;
+}
+
+.identity-trace li {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.identity-trace li span,
+.identity-search small,
+.identity-round-queries,
+.identity-decision,
+.identity-next {
+  color: var(--muted-strong);
+}
+
+.identity-search h4,
+.identity-round h3 {
+  font-size: 1.35rem;
+}
+
+.identity-search li {
+  grid-template-columns: auto minmax(0, 1fr);
+  margin-top: 0.55rem;
+}
+
+.identity-search small {
+  grid-column: 2;
+  font-size: 0.82rem;
+}
+
+.identity-search a {
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+@media (max-width: 900px) {
+  .identity-candidates,
+  .identity-fields,
+  .identity-candidate dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 620px) {
+  .identity-form {
+    padding: 0.8rem;
+  }
+
+  .identity-submit {
+    justify-self: stretch;
+  }
+}

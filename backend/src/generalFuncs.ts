@@ -138,12 +138,19 @@ const OPENROUTER_MODEL_CACHE_TTL_MS = 10 * 60 * 1000;
 
 /** Modelos free de respaldo si `/models` no responde. */
 export const PREFERRED_FREE_TEXT_MODELS: readonly string[] = [
-  "nvidia/nemotron-3-super-120b-a12b:free",
-  "google/gemma-4-31b-it:free",
   "nvidia/nemotron-3.5-lightning:free",
-  "thinkingmachines/inkling:free",
+  "google/gemma-4-31b-it:free",
   "openrouter/free",
 ];
+
+function isModelScopedUnauthorized(error: GeneralError, model: string): boolean {
+  const message = error.message.toLowerCase();
+  return (
+    message.includes(model.toLowerCase()) ||
+    message.includes("agentic harness") ||
+    message.includes("no endpoints found")
+  );
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -460,6 +467,21 @@ async function resolveOpenRouterModels(
   );
 }
 
+function textParts(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (!Array.isArray(value)) return "";
+  return value
+    .map((part) => {
+      if (typeof part === "string") return part;
+      if (!isRecord(part)) return "";
+      if (typeof part.text === "string") return part.text;
+      if (typeof part.content === "string") return part.content;
+      return "";
+    })
+    .join("")
+    .trim();
+}
+
 function extractOpenRouterText(payload: unknown): string {
   if (!isRecord(payload)) return "";
 
@@ -470,20 +492,8 @@ function extractOpenRouterText(payload: unknown): string {
     const message = isRecord(choice.message) ? choice.message : null;
     if (!message) continue;
 
-    const content = message.content;
-    if (typeof content === "string" && content.trim()) {
-      return content.trim();
-    }
-
-    if (Array.isArray(content)) {
-      const text = content
-        .map((part) =>
-          isRecord(part) && typeof part.text === "string" ? part.text : "",
-        )
-        .join("")
-        .trim();
-      if (text) return text;
-    }
+    const content = textParts(message.content);
+    if (content) return content;
   }
 
   return "";
@@ -558,7 +568,12 @@ export async function searchWikidata(
 
   const response = await fetchJson(
     url.toString(),
-    { headers: { Accept: "application/json" } },
+    {
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "Consta/0.1 (https://github.com/MarioJoseMelendez/consta)",
+      },
+    },
     options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
   );
 
@@ -731,6 +746,7 @@ export async function searchTavily(
  * Llama a OpenRouter con fallback entre modelos free que declaran salida de
  * texto. Si un modelo no devuelve texto, se descarta y se pasa al siguiente.
  * Solo reintenta errores transitorios (429, 5xx, timeout o red).
+ * Un 401 de la clave detiene la cadena. Un 403 que nombra al modelo se salta.
  */
 export async function callOpenRouter(
   env: GeneralEnv,
@@ -853,6 +869,7 @@ export async function callOpenRouter(
             temperature,
             max_tokens: maxTokens,
             stream: false,
+            reasoning: { effort: "none" },
           }),
         },
         timeoutMs,
@@ -867,9 +884,9 @@ export async function callOpenRouter(
           code: error.code,
           message: error.message,
         });
-        lastError = error;
+        if (!lastError?.retryable || error.retryable) lastError = error;
 
-        if (error.code === "unauthorized") {
+        if (error.code === "unauthorized" && !isModelScopedUnauthorized(error, model)) {
           return { ok: false, text: "", model: null, attempts, error };
         }
 

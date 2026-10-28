@@ -3,10 +3,14 @@
 API HTTP de Consta para investigación de registros públicos, construida con
 TypeScript, [Hono](https://hono.dev/) y Cloudflare Workers.
 
-> **Modo demo.** Todas las entidades, relaciones, evidencias y análisis que
-> devuelve esta API son ficticios. No representan empresas ni personas reales.
-> El manifiesto declara el modo demo y todas las respuestas incluyen la cabecera
-> `X-Consta-Demo: true`. No uses estos datos como fuente de verdad.
+> **Modo demo.** Las entidades, relaciones, evidencias y análisis que devuelven
+> las rutas de expediente son ficticios. No representan empresas ni personas
+> reales. El manifiesto declara el modo demo y esas respuestas incluyen la
+> cabecera `X-Consta-Demo: true`. No uses esos datos como fuente de verdad.
+>
+> `POST /identity/investigate` es distinto: busca en Tavily y Wikidata y no
+> envía `X-Consta-Demo`. Un campo sin URL de esas búsquedas queda en
+> `not_found`.
 
 ## Stack
 
@@ -56,6 +60,7 @@ bundle sin publicar. `wrangler dev` carga variables desde `.dev.vars`; usa
 | `GET` | `/tools/get_evidence?ids=a,b` | `{ items: Evidence[] }`. Sin `ids` devuelve toda la evidencia demo. |
 | `GET` | `/tools/get_document?id=` | Metadatos `{ id, title, url, license, content_type }` de una evidencia. `404` si no existe. |
 | `POST` | `/analyze` | `AnalysisRun` demo. Acepta `{ entityId?, query?, depth? }`. |
+| `POST` | `/identity/investigate` | Investigación de identidad. Acepta `{ name, details? }` y devuelve `{ plan, rounds, candidates }`. No lleva `X-Consta-Demo`. |
 
 ### Ejemplos
 
@@ -71,6 +76,10 @@ curl "http://localhost:8787/tools/get_document?id=ev-ocds-nexo"
 curl -X POST "http://localhost:8787/analyze" \
   -H "Content-Type: application/json" \
   -d '{"entityId":"gt-nit:90000017","depth":2}'
+
+curl -X POST "http://localhost:8787/identity/investigate" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Banco de Guatemala","details":"banco central"}'
 ```
 
 Validaciones relevantes:
@@ -103,8 +112,42 @@ Todos los errores usan la forma `ApiError` del contrato:
 ```
 
 Códigos usados: `missing_parameter`, `invalid_parameter`, `invalid_json`,
-`invalid_body`, `entity_not_found`, `document_not_found`, `not_found` e
-`internal_error` (este último con `retryable: true`).
+`invalid_body`, `entity_not_found`, `document_not_found`, `not_found`,
+`invalid_plan`, `invalid_model_json` e `internal_error` (este último con
+`retryable: true`). La identidad también puede reenviar el código de Tavily u
+OpenRouter, por ejemplo `missing_api_key`.
+
+## Identidad
+
+`POST /identity/investigate` resuelve candidatos a partir de un nombre y una
+descripción opcional. El cuerpo es `{ "name": "...", "details": "..." }`.
+`name` es obligatorio y admite hasta 200 caracteres. `details` es opcional y
+admite hasta 2000.
+
+El backend hace, en este orden:
+
+1. Una llamada al modelo arma el plan (`interpretation` y entre 3 y 5 queries).
+   Esta llamada no cuenta como ronda. Si el JSON trae menos consultas válidas,
+   se usan esas, hasta un máximo de 5.
+2. Hasta tres rondas. En cada una, cada query se busca en Tavily y en Wikidata.
+3. El modelo actualiza `candidates` y decide `continue` o `stop`. Si pide
+   `continue`, la ronda siguiente usa `nextQueries`. En la tercera ronda no hay
+   otra búsqueda, aunque el modelo quiera seguir.
+
+La respuesta es `{ plan, rounds, candidates }`. Cada candidato trae los 15
+campos del contrato, en el orden de `IDENTITY_FIELD_DEFINITIONS`. Cada campo
+tiene `value`, `status` (`found`, `not_found`, `conflicting` o `alleged`) y
+`sources[]` con `source`, `title` y `url`. Si el modelo cita una URL que no
+salió de Tavily o Wikidata, esa fuente se descarta. Un valor que se queda sin
+fuente pasa a `not_found` y `value: null` (`type` guarda `unknown`).
+
+Si el plan no llega a generarse, la respuesta es un `ApiError` con estado 502.
+Si una ronda posterior falla y ya hay plan o búsquedas, el estado es 502 y el
+cuerpo incluye lo acumulado más `error`. El JSON del modelo tiene un intento
+de reparación; si tampoco parsea, el error es `invalid_model_json`.
+
+Usa `TAVILY_API_KEY` y `OPENROUTER_API_KEY`. Sin esas keys la búsqueda o el
+modelo devuelven `missing_api_key` y la ruta no se marca como demo.
 
 ## CORS
 
@@ -163,7 +206,9 @@ free que declaran salida de texto. Si `/models` responde, filtra por `:free` y
 429, 5xx, timeout y errores de red; descarta los modelos que devuelven contenido
 vacío y pasa al siguiente.
 
-Devuelve `{ ok, text, model, usage?, attempts, error? }`. No lanza.
+Devuelve `{ ok, text, model, usage?, attempts, error? }`. No lanza. Un 401 de
+la clave detiene el recorrido. Un 403 que nombra a un modelo concreto lo salta
+y prueba el siguiente.
 
 Opciones: `models`, `temperature`, `maxTokens`, `timeoutMs`, `retries` y
 `retryDelayMs`.

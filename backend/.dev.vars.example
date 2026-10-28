@@ -12,7 +12,7 @@ ENVIRONMENT=demo
 # Sin esta variable, el backend usa el bundle demo local.
 # GT_DATA_URL=http://localhost:8788
 
-# Tavily Search API (herramienta general).
+# Tavily Search API (herramienta general y POST /identity/investigate).
 # Sin key, searchTavily devuelve missing_api_key.
 # La key se obtiene en https://app.tavily.com (plan gratis, sin tarjeta).
 # TAVILY_API_KEY=tvly-...
@@ -24,7 +24,7 @@ ENVIRONMENT=demo
 # WIKIDATA_API_URL=https://www.wikidata.org/w/api.php
 # WIKIDATA_LANGUAGE=es
 
-# OpenRouter (modelos free con salida de texto).
+# OpenRouter (modelos free con salida de texto y POST /identity/investigate).
 # Sin key, callOpenRouter devuelve missing_api_key.
 # OPENROUTER_API_KEY=sk-or-v1-...
 # OPENROUTER_MODEL=

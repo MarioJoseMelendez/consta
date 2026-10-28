@@ -16,6 +16,11 @@ import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { buildAnalysisRun } from "./analyze";
 import { gtBaseUrl, gtGet } from "./gt";
+import {
+  IDENTITY_DETAILS_MAX,
+  IDENTITY_NAME_MAX,
+  investigateIdentity,
+} from "./identity";
 
 interface Bindings {
   ENVIRONMENT?: string;
@@ -178,9 +183,15 @@ function isAllowedOrigin(origin: string, extraOrigins: string[]): boolean {
   );
 }
 
-// Marca todas las respuestas: los datos actuales son ficticios.
+function isIdentityPath(pathname: string): boolean {
+  return pathname === "/identity" || pathname.startsWith("/identity/");
+}
+
+// Las rutas demo se marcan como ficticias. /identity/* consulta fuentes públicas.
 app.use("*", async (c, next) => {
   await next();
+  const pathname = new URL(c.req.url).pathname;
+  if (isIdentityPath(pathname)) return;
   c.header("X-Consta-Demo", "true");
 });
 
@@ -203,7 +214,7 @@ app.get("/", (c) =>
     service: SERVICE_NAME,
     version: SERVICE_VERSION,
     description:
-      "API de Consta para investigación de registros públicos. Todos los datos expuestos son ficticios (demo).",
+      "API de Consta para investigación de registros públicos. Las rutas de entidades y análisis están en modo demo. POST /identity/investigate consulta fuentes públicas y no envía X-Consta-Demo.",
     demo: true,
     links: {
       manifest: "/manifest",
@@ -220,6 +231,7 @@ app.get("/", (c) =>
       "GET /tools/get_evidence?ids=a,b",
       "GET /tools/get_document?id=",
       "POST /analyze",
+      "POST /identity/investigate",
     ],
   }),
 );
@@ -506,6 +518,63 @@ app.post("/analyze", async (c) => {
   }
 
   return c.json(buildAnalysisRun(bundle));
+});
+
+app.post("/identity/investigate", async (c) => {
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(apiError("invalid_json", "El cuerpo de la solicitud debe ser JSON válido."), 400);
+  }
+
+  if (!isRecord(body)) {
+    return c.json(apiError("invalid_body", "El cuerpo debe ser un objeto JSON."), 400);
+  }
+  if (typeof body.name !== "string") {
+    return c.json(apiError("missing_parameter", 'Se requiere "name".'), 400);
+  }
+  if (body.details !== undefined && typeof body.details !== "string") {
+    return c.json(apiError("invalid_parameter", '"details" debe ser una cadena.'), 400);
+  }
+
+  const name = body.name.trim();
+  const details = typeof body.details === "string" ? body.details.trim() : undefined;
+
+  if (!name) {
+    return c.json(apiError("missing_parameter", 'Se requiere "name".'), 400);
+  }
+  if (name.length > IDENTITY_NAME_MAX) {
+    return c.json(
+      apiError("invalid_parameter", `"name" no puede superar ${IDENTITY_NAME_MAX} caracteres.`),
+      400,
+    );
+  }
+  if (details && details.length > IDENTITY_DETAILS_MAX) {
+    return c.json(
+      apiError(
+        "invalid_parameter",
+        `"details" no puede superar ${IDENTITY_DETAILS_MAX} caracteres.`,
+      ),
+      400,
+    );
+  }
+
+  const result = await investigateIdentity(c.env, name, details || undefined);
+  const hasWork =
+    result.plan.queries.length > 0 ||
+    result.rounds.length > 0 ||
+    result.candidates.length > 0;
+
+  if (result.error && !hasWork) {
+    const status =
+      result.error.code === "missing_parameter" || result.error.code === "invalid_parameter"
+        ? 400
+        : 502;
+    return c.json(apiError(result.error.code, result.error.message, result.error.retryable), status);
+  }
+
+  return c.json(result, result.error ? 502 : 200);
 });
 
 app.notFound((c) =>

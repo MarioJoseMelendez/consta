@@ -182,3 +182,114 @@ export interface ApiError {
     retryable?: boolean;
   };
 }
+
+/* --------------------------------------------------------------------------
+   Identidad — flujo de resolución
+   -------------------------------------------------------------------------- */
+
+export type IdentitySource = "tavily" | "wikidata";
+
+export type IdentityProfileType = "person" | "enterprise" | "unknown";
+
+export type IdentityFieldStatus =
+  | "found"
+  | "not_found"
+  | "conflicting"
+  | "alleged";
+
+export type IdentityFieldKey =
+  | "type"
+  | "name"
+  | "socialName"
+  | "nationalID"
+  | "taxesID"
+  | "aliases"
+  | "dateOfBirth"
+  | "nationality"
+  | "address"
+  | "legalRepresentative"
+  | "incorporationDate"
+  | "website"
+  | "email"
+  | "phone"
+  | "occupation";
+
+export interface IdentitySourceRef {
+  source: IdentitySource;
+  title: string;
+  url: string;
+}
+
+export interface IdentityField {
+  key: IdentityFieldKey;
+  label: string;
+  value: string | null;
+  status: IdentityFieldStatus;
+  sources: IdentitySourceRef[];
+}
+
+export interface IdentityCandidate {
+  id: string;
+  label: string;
+  description: string;
+  fields: IdentityField[];
+}
+
+export interface IdentityPlanQuery {
+  query: string;
+  purpose: string;
+}
+
+export interface IdentityPlan {
+  interpretation: string;
+  queries: IdentityPlanQuery[];
+}
+
+export interface IdentitySearchItem {
+  source: IdentitySource;
+  title: string;
+  url: string;
+  snippet?: string;
+  publishedDate?: string;
+  license?: string;
+}
+
+export interface IdentitySearchError {
+  source: IdentitySource;
+  code: string;
+  message: string;
+}
+
+export interface IdentityQueryResult {
+  query: string;
+  items: IdentitySearchItem[];
+  errors: IdentitySearchError[];
+}
+
+export interface IdentityDecision {
+  action: "continue" | "stop";
+  reason: string;
+  nextQueries: string[];
+}
+
+export interface IdentityRound {
+  round: number;
+  queries: string[];
+  searches: IdentityQueryResult[];
+  decision: IdentityDecision | null;
+}
+
+export interface IdentityInvestigation {
+  plan: IdentityPlan;
+  rounds: IdentityRound[];
+  candidates: IdentityCandidate[];
+}
+
+export interface IdentityInvestigationRequest {
+  name: string;
+  details?: string;
+}
+
+export interface IdentityInvestigationResponse extends IdentityInvestigation {
+  error?: ApiError["error"];
+}
