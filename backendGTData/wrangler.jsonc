@@ -1,0 +1,35 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "consta-gt-data",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-26",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "ENVIRONMENT": "development"
+  }
+
+  // Persistencia: se habilita después de la ingesta del snapshot.
+  // Sin binding DB el worker opera en modo demo (datos ficticios de @consta/contracts).
+  // "d1_databases": [
+  //   {
+  //     "binding": "DB",
+  //     "database_name": "consta-gt-data",
+  //     "database_id": "<D1_DATABASE_ID>",
+  //     "migrations_dir": "migrations"
+  //   }
+  // ],
+  // "r2_buckets": [
+  //   {
+  //     "binding": "EVIDENCE_BUCKET",
+  //     "bucket_name": "consta-gt-evidence",
+  //     "preview_bucket_name": "consta-gt-evidence-preview"
+  //   }
+  // ]
+
+  // Opcionales:
+  // "vars": { "PUBLIC_BASE_URL": "https://consta-gt-data.<subdominio>.workers.dev",
+  //           "CORS_ORIGINS": "https://app.consta.example" }
+}

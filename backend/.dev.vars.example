@@ -1,0 +1,25 @@
+# Copia este archivo a .dev.vars para desarrollo local.
+# .dev.vars está ignorado por git y no debe contener secretos reales en el repo.
+
+# Entorno reportado por GET /health.
+ENVIRONMENT=demo
+
+# Orígenes adicionales permitidos por CORS, separados por coma.
+# http://localhost:3000 y los dominios *.pages.dev ya están permitidos.
+# CORS_ORIGINS=https://consta.example.com
+
+# Channel GT que consume el analyzer server-side.
+# Sin esta variable, el backend usa el bundle demo local.
+# GT_DATA_URL=http://localhost:8788
+
+# Tavily Search API (herramienta general).
+# Sin key, searchTavily devuelve missing_api_key.
+# La key se obtiene en https://app.tavily.com (plan gratis, sin tarjeta).
+# TAVILY_API_KEY=tvly-...
+# TAVILY_BASE_URL=https://api.tavily.com
+# TAVILY_SEARCH_DEPTH=basic
+# TAVILY_INCLUDE_RAW_CONTENT=true
+
+# Wikidata (la wiki que ya usa el Channel GT). No requiere key.
+# WIKIDATA_API_URL=https://www.wikidata.org/w/api.php
+# WIKIDATA_LANGUAGE=es

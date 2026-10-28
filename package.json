@@ -1,0 +1,18 @@
+{
+  "name": "consta",
+  "version": "0.1.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "packageManager": "pnpm@12.10.1",
+  "scripts": {
+    "dev": "pnpm -r --parallel dev",
+    "dev:api": "pnpm --filter @consta/backend dev",
+    "dev:web": "pnpm --filter @consta/frontend dev",
+    "dev:gt": "pnpm --filter @consta/gt-data dev",
+    "typecheck": "pnpm -r typecheck",
+    "build": "pnpm -r build",
+    "build:web": "pnpm --filter @consta/frontend build",
+    "deploy:api": "pnpm --filter @consta/backend deploy",
+    "deploy:gt": "pnpm --filter @consta/gt-data deploy"
+  }
+}

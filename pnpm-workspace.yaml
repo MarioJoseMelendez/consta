@@ -1,0 +1,12 @@
+packages:
+  - "backend"
+  - "frontend"
+  - "backendGTData"
+  - "packages/*"
+allowBuilds:
+  esbuild: true
+  workerd: true
+minimumReleaseAgeExclude:
+  - "@cloudflare/workers-types@5.20261026.1"
+  - miniflare@5.20261023.0-beta
+  - wrangler@4.153.0
