@@ -16,6 +16,7 @@
 import {
   IDENTITY_FIELD_DEFINITIONS,
   IDENTITY_FIELD_KEYS,
+  IDENTITY_MAX_EXTRA_SEARCHES,
   emptyIdentityField,
   identityFieldLabel,
   type IdentityCandidate,
@@ -23,6 +24,7 @@ import {
   type IdentityField,
   type IdentityFieldKey,
   type IdentityFieldStatus,
+  type IdentityInvestigation,
   type IdentityInvestigationResponse,
   type IdentityPlan,
   type IdentityPlanQuery,
@@ -1705,6 +1707,223 @@ async function applyResultScores(
       };
     }),
   }));
+}
+
+function extraCount(rounds: IdentityRound[]): number {
+  return rounds.filter((round) => round.round > MAX_ROUNDS).length;
+}
+
+const EXTRA_FIELDS = [
+  "taxesID",
+  "phone",
+  "email",
+  "legalRepresentative",
+  "address",
+  "nationalID",
+] as const satisfies readonly IdentityFieldKey[];
+
+const EXTRA_TERM: Record<(typeof EXTRA_FIELDS)[number], string> = {
+  taxesID: "NIT",
+  phone: "teléfono",
+  email: "correo",
+  legalRepresentative: "representante legal",
+  address: "dirección oficina",
+  nationalID: "DPI",
+};
+
+function fieldNeedsExtra(field: IdentityField | undefined): boolean {
+  if (!field) return true;
+  return field.confidence !== "probable" && field.confidence !== "corroborated";
+}
+
+function extraQueries(
+  name: string,
+  candidates: IdentityCandidate[],
+  prior: Set<string>,
+): IdentityToolQuery[] {
+  const queries: IdentityToolQuery[] = [];
+  for (const key of EXTRA_FIELDS) {
+    const needed =
+      candidates.length === 0 ||
+      candidates.some((candidate) =>
+        fieldNeedsExtra(candidate.fields.find((field) => field.key === key)),
+      );
+    if (!needed) continue;
+    const base = clip(`${name} ${EXTRA_TERM[key]}`, 300);
+    const alternate = clip(`${name} ${EXTRA_TERM[key]} registro`, 300);
+    const query =
+      base && !prior.has(queryKey(base, "tavily"))
+        ? base
+        : alternate && !prior.has(queryKey(alternate, "tavily"))
+          ? alternate
+          : null;
+    if (!query) continue;
+    queries.push({
+      query,
+      tool: "tavily",
+      purpose: `${fieldPurpose(key)} Registro público. La dirección puede ser una oficina.`,
+    });
+  }
+  return queries;
+}
+
+function mergeExtraCandidates(
+  previous: IdentityCandidate[],
+  incoming: IdentityCandidate[],
+): IdentityCandidate[] {
+  if (previous.length === 0) return incoming;
+  if (incoming.length === 0) return previous;
+  return previous.map((candidate) => {
+    const update =
+      incoming.find((item) => item.id === candidate.id) ??
+      incoming.find((item) => item.label === candidate.label);
+    if (!update) return candidate;
+    return {
+      ...candidate,
+      description: update.description || candidate.description,
+      fields: candidate.fields.map((field) => {
+        const next = update.fields.find((item) => item.key === field.key);
+        if (!next || next.status === "not_found" || next.sources.length === 0) return field;
+        if (field.confidence === "probable" || field.confidence === "corroborated") return field;
+        return { ...next, note: next.note ?? field.note, score: null, confidence: null };
+      }),
+    };
+  });
+}
+
+function extraPrompt(input: {
+  name: string;
+  details?: string;
+  searches: IdentityQueryResult[];
+  candidates: IdentityCandidate[];
+}): string {
+  const lines = [
+    `Nombre consultado: ${input.name}`,
+    input.details
+      ? `Descripción del periodista, no es evidencia: ${input.details}`
+      : "Sin descripción adicional.",
+    "Búsqueda extra. Completa solo NIT, teléfono, correo, representante legal, dirección y documento nacional.",
+    "Una dirección de oficina vale. Si lo es, escribe note. Si no hace falta aclarar, omite note.",
+    "No inventes valores. Si el resultado no trae el dato, omite el campo.",
+    'decision.action es "stop" y nextQueries es [].',
+    "",
+    "Candidatos actuales:",
+    JSON.stringify(input.candidates),
+    "",
+    "Resultados de esta búsqueda. sources.url solo puede ser una de estas URLs:",
+  ];
+  for (const search of input.searches) {
+    lines.push("", `Consulta: ${search.query}`);
+    if (search.items.length === 0) lines.push("Sin resultados.");
+    for (const item of search.items) {
+      lines.push(`- source: ${item.source}`);
+      lines.push(`  title: ${item.title}`);
+      lines.push(`  url: ${item.url}`);
+      if (item.snippet) lines.push(`  snippet: ${item.snippet.slice(0, 280)}`);
+    }
+  }
+  lines.push("", "Devuelve solo el JSON con candidates y decision.");
+  return lines.join("\n");
+}
+
+const EXTRA_SYSTEM = [
+  "Eres el analista de identidad de Consta. Respondes únicamente con un objeto JSON. No uses markdown.",
+  "Solo puedes afirmar lo que esté escrito en los resultados de esta búsqueda extra.",
+  "Solo completes taxesID (NIT), phone, email, legalRepresentative, address y nationalID (DPI o CUI).",
+  "No borres ni reemplaces un dato que ya estaba. Si esta búsqueda no lo trae, omite el campo.",
+  "address puede ser la oficina, no solo el domicilio. Si es una oficina, note lo dice en una frase.",
+  "Cada valor found necesita sources cuya url sea una de las URLs entregadas.",
+  'decision es {"action":"stop","reason":"MOTIVO","nextQueries":[]}.',
+].join("\n");
+
+export async function requestExtraIdentitySearch(
+  env: GeneralEnv,
+  name: string,
+  details: string | undefined,
+  current: IdentityInvestigation,
+): Promise<IdentityInvestigationResponse> {
+  const subject = name.trim();
+  const context = details?.trim() || undefined;
+  if (!subject) {
+    return emptyResult({ code: "missing_parameter", message: 'Se requiere "name".' });
+  }
+  if (extraCount(current.rounds) >= IDENTITY_MAX_EXTRA_SEARCHES) {
+    return {
+      ...current,
+      error: {
+        code: "extra_limit",
+        message: "Solo se pueden pedir dos búsquedas extra.",
+      },
+    };
+  }
+
+  const prior = new Set<string>();
+  for (const round of current.rounds) {
+    for (const query of round.queries) prior.add(queryKey(query.query, query.tool));
+  }
+  const roundQueries = dedupeQueries(extraQueries(subject, current.candidates, prior), prior);
+  if (roundQueries.length === 0) return current;
+
+  const searches = await Promise.all(
+    roundQueries.map((item) => searchIdentityQuery(env, item)),
+  );
+  const catalog = new Map<string, IdentitySearchItem>();
+  for (const round of current.rounds) {
+    for (const search of round.searches) addToCatalog(catalog, search.items);
+  }
+  for (const search of searches) addToCatalog(catalog, search.items);
+
+  const roundCall = await callOpenRouter(
+    env,
+    [
+      { role: "system", content: EXTRA_SYSTEM },
+      {
+        role: "user",
+        content: extraPrompt({
+          name: subject,
+          details: context,
+          searches,
+          candidates: current.candidates,
+        }),
+      },
+    ],
+    modelCallOptions(env, ROUND_MAX_TOKENS),
+  );
+  if (!roundCall.ok) {
+    logModelFailure("búsqueda extra", roundCall.attempts, roundCall.error?.code);
+  }
+  const roundJson = roundCall.ok
+    ? await parseModelJson(env, roundCall.text, ROUND_MAX_TOKENS)
+    : null;
+  const update =
+    roundJson?.ok === true
+      ? readRoundUpdate(roundJson.value, catalog, prior, subject)
+      : null;
+  const roundNumber = MAX_ROUNDS + extraCount(current.rounds) + 1;
+  const decision = stopDecision(
+    update?.decision.reason ||
+      "Búsqueda extra de NIT, teléfono, correo, representante, dirección y documento.",
+  );
+  const rounds = [
+    ...current.rounds,
+    { round: roundNumber, queries: roundQueries, searches, decision },
+  ];
+  const filled = fillFromSearches(
+    ensureCandidates(
+      mergeExtraCandidates(current.candidates, update?.candidates ?? []),
+      subject,
+      rounds,
+    ),
+    subject,
+    roundQueries,
+    searches,
+  );
+
+  return {
+    plan: current.plan,
+    rounds,
+    candidates: await applyResultScores(env, filled, rounds),
+  };
 }
 
 export async function investigateIdentity(

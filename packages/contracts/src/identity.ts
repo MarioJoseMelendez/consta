@@ -35,6 +35,8 @@ export const IDENTITY_FIELD_DEFINITIONS: readonly IdentityFieldDefinition[] = [
   { key: "occupation", label: "Ocupación" },
 ];
 
+export const IDENTITY_MAX_EXTRA_SEARCHES = 2;
+
 export const IDENTITY_FIELD_KEYS: readonly IdentityFieldKey[] =
   IDENTITY_FIELD_DEFINITIONS.map((definition) => definition.key);
 

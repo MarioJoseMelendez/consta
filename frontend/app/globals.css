@@ -5127,6 +5127,48 @@ code {
   opacity: 0.72;
 }
 
+.identity-more {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+
+.identity-more button {
+  display: grid;
+  gap: 0.35rem;
+  justify-items: start;
+  width: 100%;
+  padding: 0.85rem 0.95rem;
+  border: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 0.58rem;
+  font-weight: 500;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  text-align: left;
+}
+
+.identity-more button span {
+  font-family: var(--sans);
+  font-size: 0.82rem;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--paper-muted);
+}
+
+.identity-more button:hover:not(:disabled) {
+  background: var(--lime);
+  color: var(--ink);
+}
+
+.identity-more button:disabled {
+  cursor: progress;
+  opacity: 0.72;
+}
+
 .identity-panel {
   padding-bottom: clamp(3.5rem, 7vw, 6rem);
 }

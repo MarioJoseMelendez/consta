@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import {
   IDENTITY_FIELD_DEFINITIONS,
+  IDENTITY_MAX_EXTRA_SEARCHES,
   emptyIdentityField,
   identityConfidenceLabel,
   identitySourceTierLabel,
@@ -87,7 +88,7 @@ function decisionLabel(action: "continue" | "stop"): string {
 }
 
 export default function IdentityPanel() {
-  const { phase, result, error, selectedId, selectCandidate } = useIdentity();
+  const { phase, result, error, notice, selectedId, selectCandidate, searchMore } = useIdentity();
   const panelRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -109,13 +110,15 @@ export default function IdentityPanel() {
       <div className="identity-head">
         <p className="eyebrow">Resolución de identidad</p>
         <h2 id="identity-title">
-          {phase === "loading"
+          {phase === "loading" && !result
             ? "Buscando en fuentes públicas."
-            : "Candidatos con fuente."}
+            : phase === "loading"
+              ? "Buscando NIT, teléfono, correo, representante, dirección y documento."
+              : "Candidatos con fuente."}
         </h2>
       </div>
 
-      {phase === "loading" ? (
+      {phase === "loading" && !result ? (
         <p className="identity-status" role="status">
           El plan y hasta tres rondas pueden tardar unos minutos.
         </p>
@@ -195,6 +198,25 @@ export default function IdentityPanel() {
         </ul>
       ) : null}
 
+      {result ? (
+        <div className="identity-more">
+          {notice ? <p className="identity-status">{notice}</p> : null}
+          {result.rounds.filter((round) => round.round > 3).length <
+          IDENTITY_MAX_EXTRA_SEARCHES ? (
+            <button type="button" disabled={phase === "loading"} onClick={() => void searchMore()}>
+              {phase === "loading"
+                ? "Buscando más"
+                : result.rounds.filter((round) => round.round > 3).length === 1
+                  ? "Última búsqueda extra"
+                  : "Buscar más"}
+              <span>NIT, teléfono, correo, representante, dirección y documento.</span>
+            </button>
+          ) : (
+            <p className="identity-status">Ya se pidieron las dos búsquedas extra.</p>
+          )}
+        </div>
+      ) : null}
+
       {result && phase !== "loading" && result.candidates.length === 0 && !error ? (
         <p className="identity-status">
           Ningún candidato quedó sostenido por una fuente pública.
@@ -259,7 +281,7 @@ export default function IdentityPanel() {
 
           {result.rounds.map((round) => (
             <article key={round.round} className="identity-round">
-              <h3>Ronda {round.round}</h3>
+              <h3>{round.round > 3 ? `Búsqueda extra ${round.round - 3}` : `Ronda ${round.round}`}</h3>
               <ul className="identity-round-queries">
                 {round.queries.map((item) => (
                   <li key={`${item.tool ?? "both"}-${item.query}`}>

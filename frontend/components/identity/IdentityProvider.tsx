@@ -10,7 +10,7 @@ import {
 } from "react";
 import type { IdentityInvestigationResponse } from "@consta/contracts";
 
-import { IdentityApiError, investigateIdentity } from "@/lib/identity";
+import { IdentityApiError, investigateIdentity, requestMoreIdentity } from "@/lib/identity";
 
 type IdentityPhase = "idle" | "loading" | "ready" | "error";
 
@@ -19,7 +19,9 @@ interface IdentityContextValue {
   result: IdentityInvestigationResponse | null;
   error: string | null;
   selectedId: string | null;
+  notice: string | null;
   investigate: (name: string, details: string) => Promise<void>;
+  searchMore: () => Promise<void>;
   selectCandidate: (id: string) => void;
 }
 
@@ -38,12 +40,18 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
   const [result, setResult] = useState<IdentityInvestigationResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [consultedName, setConsultedName] = useState("");
+  const [consultedDetails, setConsultedDetails] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
 
   const investigate = useCallback(async (name: string, details: string) => {
     setPhase("loading");
     setError(null);
+    setNotice(null);
     setResult(null);
     setSelectedId(null);
+    setConsultedName(name.trim());
+    setConsultedDetails(details.trim());
 
     try {
       const response = await investigateIdentity({
@@ -78,6 +86,47 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
     }
   }, []);
 
+  const searchMore = useCallback(async () => {
+    if (!result || !consultedName || phase === "loading") return;
+    const before = result.rounds.length;
+    setPhase("loading");
+    setError(null);
+    setNotice(null);
+
+    try {
+      const response = await requestMoreIdentity({
+        name: consultedName,
+        ...(consultedDetails ? { details: consultedDetails } : {}),
+        investigation: result,
+      });
+      setResult(response);
+      setError(response.error?.message ?? null);
+      setNotice(
+        response.rounds.length === before
+          ? "Esos datos ya se buscaron o ya están en el perfil."
+          : null,
+      );
+      setPhase("ready");
+    } catch (caught) {
+      if (caught instanceof IdentityApiError && caught.partial) {
+        setResult({
+          ...caught.partial,
+          error: {
+            code: caught.code,
+            message: caught.message,
+            ...(caught.retryable ? { retryable: true } : {}),
+          },
+        });
+      }
+      setError(
+        caught instanceof IdentityApiError
+          ? caught.message
+          : "No se pudo completar la búsqueda extra.",
+      );
+      setPhase("ready");
+    }
+  }, [consultedDetails, consultedName, phase, result]);
+
   const selectCandidate = useCallback((id: string) => {
     setSelectedId((current) => (current === id ? null : id));
   }, []);
@@ -88,10 +137,12 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
       result,
       error,
       selectedId,
+      notice,
       investigate,
+      searchMore,
       selectCandidate,
     }),
-    [phase, result, error, selectedId, investigate, selectCandidate],
+    [phase, result, error, selectedId, notice, investigate, searchMore, selectCandidate],
   );
 
   return (

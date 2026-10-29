@@ -61,6 +61,7 @@ bundle sin publicar. `wrangler dev` carga variables desde `.dev.vars`; usa
 | `GET` | `/tools/get_document?id=` | Metadatos `{ id, title, url, license, content_type }` de una evidencia. `404` si no existe. |
 | `POST` | `/analyze` | `AnalysisRun` demo. Acepta `{ entityId?, query?, depth? }`. |
 | `POST` | `/identity/investigate` | Investigación de identidad. Acepta `{ name, details? }` y devuelve `{ plan, rounds, candidates }`. No lleva `X-Consta-Demo`. |
+| `POST` | `/identity/more` | Hasta dos búsquedas extra. Acepta `{ name, details?, investigation }` y busca NIT, teléfono, correo, representante legal, dirección y documento nacional. |
 
 ### Ejemplos
 

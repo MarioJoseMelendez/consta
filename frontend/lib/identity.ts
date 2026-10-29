@@ -69,15 +69,15 @@ function hasPartial(value: IdentityInvestigation): boolean {
   );
 }
 
-export async function investigateIdentity(
-  input: IdentityInvestigationRequest,
+async function postIdentity(
+  path: string,
+  body: unknown,
 ): Promise<IdentityInvestigationResponse> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), IDENTITY_TIMEOUT_MS);
 
   try {
-    const details = input.details?.trim();
-    const response = await fetch(`${API_BASE}/identity/investigate`, {
+    const response = await fetch(`${API_BASE}${path}`, {
       method: "POST",
       cache: "no-store",
       signal: controller.signal,
@@ -85,10 +85,7 @@ export async function investigateIdentity(
         Accept: "application/json",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        name: input.name.trim(),
-        ...(details ? { details } : {}),
-      }),
+      body: JSON.stringify(body),
     });
 
     let payload: unknown = null;
@@ -148,4 +145,27 @@ export async function investigateIdentity(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function investigateIdentity(
+  input: IdentityInvestigationRequest,
+): Promise<IdentityInvestigationResponse> {
+  const details = input.details?.trim();
+  return postIdentity("/identity/investigate", {
+    name: input.name.trim(),
+    ...(details ? { details } : {}),
+  });
+}
+
+export async function requestMoreIdentity(input: {
+  name: string;
+  details?: string;
+  investigation: IdentityInvestigation;
+}): Promise<IdentityInvestigationResponse> {
+  const details = input.details?.trim();
+  return postIdentity("/identity/more", {
+    name: input.name.trim(),
+    ...(details ? { details } : {}),
+    investigation: input.investigation,
+  });
 }

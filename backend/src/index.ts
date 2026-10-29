@@ -9,6 +9,7 @@ import type {
   ApiError,
   EntityBundle,
   Evidence,
+  IdentityInvestigation,
   Relationship,
   SearchResponse,
 } from "@consta/contracts";
@@ -20,6 +21,7 @@ import {
   IDENTITY_DETAILS_MAX,
   IDENTITY_NAME_MAX,
   investigateIdentity,
+  requestExtraIdentitySearch,
 } from "./identity";
 
 interface Bindings {
@@ -235,6 +237,7 @@ app.get("/", (c) =>
       "GET /tools/get_document?id=",
       "POST /analyze",
       "POST /identity/investigate",
+      "POST /identity/more",
     ],
   }),
 );
@@ -577,6 +580,66 @@ app.post("/identity/investigate", async (c) => {
     return c.json(apiError(result.error.code, result.error.message, result.error.retryable), status);
   }
 
+  return c.json(result, result.error ? 502 : 200);
+});
+
+app.post("/identity/more", async (c) => {
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(apiError("invalid_json", "El cuerpo de la solicitud debe ser JSON válido."), 400);
+  }
+
+  if (!isRecord(body)) {
+    return c.json(apiError("invalid_body", "El cuerpo debe ser un objeto JSON."), 400);
+  }
+  if (typeof body.name !== "string" || !body.name.trim()) {
+    return c.json(apiError("missing_parameter", 'Se requiere "name".'), 400);
+  }
+  if (body.details !== undefined && typeof body.details !== "string") {
+    return c.json(apiError("invalid_parameter", '"details" debe ser una cadena.'), 400);
+  }
+  const investigation = body.investigation;
+  if (
+    !isRecord(investigation) ||
+    !isRecord(investigation.plan) ||
+    !Array.isArray(investigation.rounds) ||
+    !Array.isArray(investigation.candidates)
+  ) {
+    return c.json(
+      apiError("invalid_parameter", 'Se requiere la investigación actual en "investigation".'),
+      400,
+    );
+  }
+
+  const name = body.name.trim();
+  const details = typeof body.details === "string" ? body.details.trim() : undefined;
+  if (name.length > IDENTITY_NAME_MAX) {
+    return c.json(
+      apiError("invalid_parameter", `"name" no puede superar ${IDENTITY_NAME_MAX} caracteres.`),
+      400,
+    );
+  }
+  if (details && details.length > IDENTITY_DETAILS_MAX) {
+    return c.json(
+      apiError(
+        "invalid_parameter",
+        `"details" no puede superar ${IDENTITY_DETAILS_MAX} caracteres.`,
+      ),
+      400,
+    );
+  }
+
+  const result = await requestExtraIdentitySearch(
+    c.env,
+    name,
+    details || undefined,
+    investigation as unknown as IdentityInvestigation,
+  );
+  if (result.error?.code === "extra_limit") {
+    return c.json(apiError(result.error.code, result.error.message), 400);
+  }
   return c.json(result, result.error ? 502 : 200);
 });
 
