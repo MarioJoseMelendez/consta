@@ -1,20 +1,38 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import {
   IDENTITY_FIELD_DEFINITIONS,
   emptyIdentityField,
+  identityConfidenceLabel,
+  identitySourceTierLabel,
   identityStatusLabel,
   identityTypeLabel,
   type IdentityCandidate,
   type IdentityField,
   type IdentityFieldKey,
   type IdentitySource,
+  type IdentitySourceRef,
 } from "@consta/contracts";
 
 import { useIdentity } from "./IdentityProvider";
 
-function sourceLabel(source: IdentitySource): string {
+function providerLabel(source: IdentitySource): string {
   return source === "tavily" ? "Tavily" : "Wikidata";
+}
+
+function sourceLabel(source: IdentitySourceRef): string {
+  const parts = [providerLabel(source.source)];
+  if (source.tier) parts.push(identitySourceTierLabel(source.tier));
+  if (source.official) parts.push("Oficial");
+  if (typeof source.score === "number") parts.push(String(source.score));
+  return parts.join(" · ");
+}
+
+function toolLabel(tool: IdentitySource | null | undefined): string {
+  if (tool === "tavily") return "Tavily";
+  if (tool === "wikidata") return "Wikidata";
+  return "Tavily y Wikidata";
 }
 
 function fieldOf(
@@ -27,9 +45,28 @@ function fieldOf(
 }
 
 function displayValue(field: IdentityField): string {
+  if (field.confidence === "uncertain") return "";
   if (field.status === "not_found" || !field.value?.trim()) return "No encontrado";
   if (field.key === "type") return identityTypeLabel(field.value);
   return field.value;
+}
+
+function fieldStatusText(field: IdentityField): string {
+  if (field.confidence === "probable" || field.confidence === "corroborated") {
+    const head =
+      field.status === "alleged"
+        ? "Alegado · "
+        : field.status === "conflicting"
+          ? "Conflicto · "
+          : "";
+    const points = field.score == null ? "" : ` · ${field.score}`;
+    return `${head}${identityConfidenceLabel(field.confidence)}${points}`;
+  }
+  return identityStatusLabel(field.status);
+}
+
+function visibleField(field: IdentityField): boolean {
+  return field.confidence !== "uncertain";
 }
 
 function candidateSources(candidate: IdentityCandidate) {
@@ -51,6 +88,12 @@ function decisionLabel(action: "continue" | "stop"): string {
 
 export default function IdentityPanel() {
   const { phase, result, error, selectedId, selectCandidate } = useIdentity();
+  const panelRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (phase === "idle") return;
+    panelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [phase, result]);
 
   if (phase === "idle") return null;
 
@@ -58,7 +101,11 @@ export default function IdentityPanel() {
     result?.candidates.find((candidate) => candidate.id === selectedId) ?? null;
 
   return (
-    <section className="shell identity-panel" aria-labelledby="identity-title">
+    <section
+      ref={panelRef}
+      className="identity-panel"
+      aria-labelledby="identity-title"
+    >
       <div className="identity-head">
         <p className="eyebrow">Resolución de identidad</p>
         <h2 id="identity-title">
@@ -70,8 +117,7 @@ export default function IdentityPanel() {
 
       {phase === "loading" ? (
         <p className="identity-status" role="status">
-          El plan y hasta tres rondas de Tavily y Wikidata pueden tardar unos
-          minutos. Cada dato espera una URL real.
+          El plan y hasta tres rondas pueden tardar unos minutos.
         </p>
       ) : null}
 
@@ -92,7 +138,7 @@ export default function IdentityPanel() {
               fieldOf(candidate, "socialName"),
               fieldOf(candidate, "nationalID"),
               fieldOf(candidate, "taxesID"),
-            ];
+            ].filter(visibleField);
 
             return (
               <li key={candidate.id}>
@@ -104,7 +150,19 @@ export default function IdentityPanel() {
                     {rows.map((field) => (
                       <div key={field.key}>
                         <dt>{field.label}</dt>
-                        <dd>{displayValue(field)}</dd>
+                        <dd>
+                          {displayValue(field)}
+                          {field.confidence === "probable" ||
+                          field.confidence === "corroborated" ? (
+                            <span
+                              className="identity-field-status"
+                              data-status={field.confidence}
+                            >
+                              {fieldStatusText(field)}
+                            </span>
+                          ) : null}
+                          {field.note ? <span className="identity-note">{field.note}</span> : null}
+                        </dd>
                       </div>
                     ))}
                   </dl>
@@ -113,7 +171,7 @@ export default function IdentityPanel() {
                     <ul className="identity-sources">
                       {sources.map((source) => (
                         <li key={source.url}>
-                          <span>{sourceLabel(source.source)}</span>
+                          <span>{sourceLabel(source)}</span>
                           <a href={source.url} target="_blank" rel="noreferrer">
                             {source.title}
                           </a>
@@ -152,18 +210,23 @@ export default function IdentityPanel() {
           <div className="identity-fields">
             {IDENTITY_FIELD_DEFINITIONS.map((definition) => {
               const field = fieldOf(selected, definition.key);
+              if (!visibleField(field)) return null;
               return (
                 <article key={definition.key} className="identity-field-card">
                   <p className="mono-label">{definition.label}</p>
                   <p className="identity-value">{displayValue(field)}</p>
-                  <p className="identity-field-status" data-status={field.status}>
-                    {identityStatusLabel(field.status)}
+                  {field.note ? <p className="identity-note">{field.note}</p> : null}
+                  <p
+                    className="identity-field-status"
+                    data-status={field.confidence ?? field.status}
+                  >
+                    {fieldStatusText(field)}
                   </p>
                   {field.sources.length > 0 ? (
                     <ul className="identity-sources">
                       {field.sources.map((source) => (
                         <li key={`${field.key}-${source.url}`}>
-                          <span>{sourceLabel(source.source)}</span>
+                          <span>{sourceLabel(source)}</span>
                           <a href={source.url} target="_blank" rel="noreferrer">
                             {source.title}
                           </a>
@@ -185,8 +248,9 @@ export default function IdentityPanel() {
           {result.plan.queries.length > 0 ? (
             <ol>
               {result.plan.queries.map((query) => (
-                <li key={query.query}>
+                <li key={`${query.tool ?? "both"}-${query.query}`}>
                   <strong>{query.query}</strong>
+                  <span className="identity-tool">{toolLabel(query.tool)}</span>
                   <span>{query.purpose}</span>
                 </li>
               ))}
@@ -196,20 +260,34 @@ export default function IdentityPanel() {
           {result.rounds.map((round) => (
             <article key={round.round} className="identity-round">
               <h3>Ronda {round.round}</h3>
-              <p className="identity-round-queries">{round.queries.join(" · ")}</p>
+              <ul className="identity-round-queries">
+                {round.queries.map((item) => (
+                  <li key={`${item.tool ?? "both"}-${item.query}`}>
+                    <strong>{item.query}</strong>
+                    <span className="identity-tool">{toolLabel(item.tool)}</span>
+                    {item.purpose ? <span>{item.purpose}</span> : null}
+                  </li>
+                ))}
+              </ul>
               {round.searches.map((search) => (
-                <div key={`${round.round}-${search.query}`} className="identity-search">
-                  <h4>{search.query}</h4>
+                <div
+                  key={`${round.round}-${search.tool ?? "both"}-${search.query}`}
+                  className="identity-search"
+                >
+                  <h4>
+                    {search.query}{" "}
+                    <span className="identity-tool">{toolLabel(search.tool)}</span>
+                  </h4>
                   {search.errors.map((item) => (
                     <p key={`${item.source}-${item.code}`} className="identity-error">
-                      {sourceLabel(item.source)}: {item.message}
+                      {providerLabel(item.source)}: {item.message}
                     </p>
                   ))}
                   {search.items.length > 0 ? (
                     <ul>
                       {search.items.map((item) => (
                         <li key={`${search.query}-${item.url}`}>
-                          <span>{sourceLabel(item.source)}</span>
+                          <span>{providerLabel(item.source)}</span>
                           <a href={item.url} target="_blank" rel="noreferrer">
                             {item.title}
                           </a>
@@ -229,7 +307,10 @@ export default function IdentityPanel() {
               </p>
               {round.decision && round.decision.nextQueries.length > 0 ? (
                 <p className="identity-next">
-                  Siguiente búsqueda: {round.decision.nextQueries.join(" · ")}
+                  Siguiente búsqueda:{" "}
+                  {round.decision.nextQueries
+                    .map((item) => `${item.query} (${toolLabel(item.tool)})`)
+                    .join(" · ")}
                 </p>
               ) : null}
               {round.round === 3 && round.decision?.action === "continue" ? (

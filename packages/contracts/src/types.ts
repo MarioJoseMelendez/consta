@@ -197,6 +197,13 @@ export type IdentityFieldStatus =
   | "conflicting"
   | "alleged";
 
+export type IdentitySourceTier = "primary" | "secondary" | "tertiary";
+
+export type IdentityRepetition = "one" | "two" | "many";
+
+/** 1–50 incierto, 51–79 probable, 80–100 corroborado. */
+export type IdentityConfidence = "uncertain" | "probable" | "corroborated";
+
 export type IdentityFieldKey =
   | "type"
   | "name"
@@ -218,6 +225,11 @@ export interface IdentitySourceRef {
   source: IdentitySource;
   title: string;
   url: string;
+  tier?: IdentitySourceTier;
+  official?: boolean;
+  repetition?: IdentityRepetition;
+  score?: number;
+  confidence?: IdentityConfidence;
 }
 
 export interface IdentityField {
@@ -226,6 +238,11 @@ export interface IdentityField {
   value: string | null;
   status: IdentityFieldStatus;
   sources: IdentitySourceRef[];
+  /** Aclaración de la investigación, por ejemplo una oficina y no el domicilio. */
+  note: string | null;
+  /** Mejor puntaje entre las fuentes de este dato. Null si no hubo valor. */
+  score: number | null;
+  confidence: IdentityConfidence | null;
 }
 
 export interface IdentityCandidate {
@@ -235,8 +252,18 @@ export interface IdentityCandidate {
   fields: IdentityField[];
 }
 
-export interface IdentityPlanQuery {
+/**
+ * Consulta dirigida a una herramienta.
+ * `tool` es `null` cuando faltó o no era "wikidata" ni "tavily":
+ * en ese caso se buscan las dos fuentes y la consulta no se descarta.
+ */
+export interface IdentityToolQuery {
   query: string;
+  tool: IdentitySource | null;
+  purpose?: string;
+}
+
+export interface IdentityPlanQuery extends IdentityToolQuery {
   purpose: string;
 }
 
@@ -262,6 +289,8 @@ export interface IdentitySearchError {
 
 export interface IdentityQueryResult {
   query: string;
+  /** Herramienta pedida. `null` si se buscó en las dos fuentes. */
+  tool: IdentitySource | null;
   items: IdentitySearchItem[];
   errors: IdentitySearchError[];
 }
@@ -269,12 +298,12 @@ export interface IdentityQueryResult {
 export interface IdentityDecision {
   action: "continue" | "stop";
   reason: string;
-  nextQueries: string[];
+  nextQueries: IdentityToolQuery[];
 }
 
 export interface IdentityRound {
   round: number;
-  queries: string[];
+  queries: IdentityToolQuery[];
   searches: IdentityQueryResult[];
   decision: IdentityDecision | null;
 }

@@ -1,8 +1,10 @@
 import type {
+  IdentityConfidence,
   IdentityField,
   IdentityFieldKey,
   IdentityFieldStatus,
   IdentityProfileType,
+  IdentitySourceTier,
 } from "./types";
 
 export interface IdentityFieldDefinition {
@@ -56,6 +58,18 @@ const IDENTITY_STATUS_LABELS: Record<IdentityFieldStatus, string> = {
   alleged: "Alegado",
 };
 
+const IDENTITY_CONFIDENCE_LABELS: Record<IdentityConfidence, string> = {
+  uncertain: "Incierto",
+  probable: "Probable",
+  corroborated: "Corroborado",
+};
+
+const IDENTITY_TIER_LABELS: Record<IdentitySourceTier, string> = {
+  primary: "Primaria",
+  secondary: "Secundaria",
+  tertiary: "Terciaria",
+};
+
 export function identityFieldLabel(key: IdentityFieldKey): string {
   return IDENTITY_FIELD_LABELS[key] ?? key;
 }
@@ -71,6 +85,14 @@ export function identityStatusLabel(status: IdentityFieldStatus): string {
   return IDENTITY_STATUS_LABELS[status] ?? status;
 }
 
+export function identityConfidenceLabel(confidence: IdentityConfidence): string {
+  return IDENTITY_CONFIDENCE_LABELS[confidence] ?? confidence;
+}
+
+export function identitySourceTierLabel(tier: IdentitySourceTier): string {
+  return IDENTITY_TIER_LABELS[tier] ?? tier;
+}
+
 export function emptyIdentityField(key: IdentityFieldKey): IdentityField {
   return {
     key,
@@ -78,5 +100,8 @@ export function emptyIdentityField(key: IdentityFieldKey): IdentityField {
     value: key === "type" ? "unknown" : null,
     status: "not_found",
     sources: [],
+    note: null,
+    score: null,
+    confidence: null,
   };
 }

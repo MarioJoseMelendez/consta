@@ -126,18 +126,37 @@ admite hasta 2000.
 
 El backend hace, en este orden:
 
-1. Una llamada al modelo arma el plan (`interpretation` y entre 3 y 5 queries).
-   Esta llamada no cuenta como ronda. Si el JSON trae menos consultas válidas,
-   se usan esas, hasta un máximo de 5.
-2. Hasta tres rondas. En cada una, cada query se busca en Tavily y en Wikidata.
-3. El modelo actualiza `candidates` y decide `continue` o `stop`. Si pide
-   `continue`, la ronda siguiente usa `nextQueries`. En la tercera ronda no hay
-   otra búsqueda, aunque el modelo quiera seguir.
+1. Una llamada al modelo arma el plan. Esta llamada no cuenta como ronda. El
+   modelo recibe el diccionario de herramientas y el de los 15 campos. La
+   primera ola no busca NIT ni cargo: son dos consultas para saber si el
+   nombre es persona o empresa. Wikidata recibe el nombre exacto. Tavily
+   recibe el mismo nombre en noticieros.
+2. Hasta tres rondas. Cada query se busca solo en la herramienta elegida. Si
+   la herramienta falta o no es `wikidata` ni `tavily`, esa query se busca en
+   ambas y no se descarta. Si el tipo ya es persona, las consultas siguientes
+   van a noticieros (cargo, alias, nacimiento, nacionalidad) y el DPI queda
+   en un registro. Si es empresa, van a registros públicos (NIT, razón social,
+   dirección, sitio, teléfono, representante, constitución). Si el tipo sigue
+   sin resolverse, la siguiente consulta solo intenta distinguirlo.
+3. El modelo actualiza `candidates`. La ronda siguiente no depende de que
+   pida NIT: se arma con el tipo ya encontrado. En la tercera ronda no hay
+   otra búsqueda. Un perfil incompleto sigue siendo un candidato: si el
+   modelo no devuelve ninguno y las búsquedas nombraron al sujeto, la
+   respuesta trae una entidad por cada resultado de Wikidata o, si Wikidata
+   no trajo ninguna, un candidato cuyo nombre citan las páginas de Tavily.
+   El resto de campos queda en `not_found`.
 
 La respuesta es `{ plan, rounds, candidates }`. Cada candidato trae los 15
 campos del contrato, en el orden de `IDENTITY_FIELD_DEFINITIONS`. Cada campo
-tiene `value`, `status` (`found`, `not_found`, `conflicting` o `alleged`) y
-`sources[]` con `source`, `title` y `url`. Si el modelo cita una URL que no
+tiene `value`, `status` (`found`, `not_found`, `conflicting` o `alleged`),
+`note` (una aclaración opcional, por ejemplo que una dirección es de una
+oficina y no del domicilio), `score`, `confidence` y `sources[]` con
+`source`, `title` y `url`. Después de armar los candidatos, `scoreResults`
+hace una sola llamada al modelo y puntúa cada resultado: primaria, secundaria
+o terciaria, si es fuente oficial y si el dato se repite en una, dos o más
+fuentes. Ese puntaje va de 1 a 100. De 1 a 50 el dato es incierto y no se
+muestra. De 51 a 79 se muestra como probable. De 80 a 100 se muestra como
+corroborado. Si el modelo cita una URL que no
 salió de Tavily o Wikidata, esa fuente se descarta. Un valor que se queda sin
 fuente pasa a `not_found` y `value: null` (`type` guarda `unknown`).
 
@@ -196,15 +215,16 @@ contenido es de terceros.
 Opciones: `limit`, `language` (solo Wikidata), `timeoutMs`; en Tavily también
 `searchDepth`, `includeRawContent`, `timeRange` y `topic`. Por defecto Tavily
 pide `raw_content` en Markdown. Timeout por defecto: 10 s. Sin key,
-`searchTavily` devuelve `missing_api_key` sin lanzar.
+`searchTavily` devuelve `missing_api_key` sin lanzar. `searchWikidata` no
+lanza: un 429, un 5xx, un timeout o un error de red se reintenta dos veces.
 
 ### `callOpenRouter`
 
 `callOpenRouter(env, messages, options?)` llama a OpenRouter y prueba modelos
 free que declaran salida de texto. Si `/models` responde, filtra por `:free` y
 `output_modalities` con `text`; si no, usa una lista de respaldo. Reintenta
-429, 5xx, timeout y errores de red; descarta los modelos que devuelven contenido
-vacío y pasa al siguiente.
+429, 5xx, timeout, errores de red y una respuesta sin texto antes de pasar al
+siguiente modelo.
 
 Devuelve `{ ok, text, model, usage?, attempts, error? }`. No lanza. Un 401 de
 la clave detiene el recorrido. Un 403 que nombra a un modelo concreto lo salta

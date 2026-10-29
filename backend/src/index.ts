@@ -84,7 +84,10 @@ const app = new Hono<{ Bindings: Bindings }>();
 const SERVICE_NAME = "consta-api";
 const SERVICE_VERSION = "0.1.0";
 const DEFAULT_ENVIRONMENT = "development";
-const LOCAL_ORIGIN = "http://localhost:3000";
+const LOCAL_ORIGINS = new Set([
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+]);
 const PAGES_ORIGIN = /^https:\/\/(?:[a-z0-9-]+\.)*pages\.dev$/i;
 const MAX_QUERY_LENGTH = 200;
 const MAX_ID_LENGTH = 200;
@@ -177,7 +180,7 @@ function parseExtraOrigins(raw: string | undefined): string[] {
 
 function isAllowedOrigin(origin: string, extraOrigins: string[]): boolean {
   return (
-    origin === LOCAL_ORIGIN ||
+    LOCAL_ORIGINS.has(origin) ||
     PAGES_ORIGIN.test(origin) ||
     extraOrigins.includes(origin)
   );

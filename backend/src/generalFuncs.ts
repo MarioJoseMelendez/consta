@@ -126,6 +126,8 @@ const TAVILY_BASE_URL = "https://api.tavily.com";
 const TAVILY_DEFAULT_DEPTH: TavilySearchDepth = "basic";
 const WIKIDATA_API_URL = "https://www.wikidata.org/w/api.php";
 const WIKIDATA_LICENSE = "CC0-1.0";
+const WIKIDATA_MAX_RETRIES = 2;
+const WIKIDATA_RETRY_DELAY_MS = 500;
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const OPENROUTER_DEFAULT_TIMEOUT_MS = 30_000;
@@ -527,6 +529,7 @@ function extractOpenRouterUsage(payload: unknown): OpenRouterUsage | undefined {
 /**
  * Busca entidades en Wikidata con `wbsearchentities`.
  * Devuelve QID, etiqueta, descripción y URL estable.
+ * Reintenta 429, 5xx, timeout y errores de red. No lanza.
  */
 export async function searchWikidata(
   env: GeneralEnv,
@@ -566,31 +569,96 @@ export async function searchWikidata(
   url.searchParams.set("limit", String(limit));
   url.searchParams.set("origin", "*");
 
-  const response = await fetchJson(
-    url.toString(),
-    {
-      headers: {
-        Accept: "application/json",
-        "User-Agent": "Consta/0.1 (https://github.com/MarioJoseMelendez/consta)",
-      },
-    },
-    options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  const headers = {
+    Accept: "application/json",
+    "User-Agent": "Consta/0.1 (https://github.com/MarioJoseMelendez/consta)",
+  };
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  let lastFailure: GeneralSearchResult | null = null;
+
+  for (let attempt = 0; attempt <= WIKIDATA_MAX_RETRIES; attempt++) {
+    let response: Awaited<ReturnType<typeof fetchJson>>;
+    try {
+      response = await fetchJson(url.toString(), { headers }, timeoutMs);
+    } catch (error) {
+      lastFailure = failure(source, q, retrievedAt, {
+        code: "network_error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Error de red al consultar Wikidata.",
+        retryable: true,
+      });
+      if (attempt === WIKIDATA_MAX_RETRIES) return lastFailure;
+      await sleep(WIKIDATA_RETRY_DELAY_MS * 2 ** attempt);
+      continue;
+    }
+
+    if (!response.ok) {
+      const error = response.error;
+      lastFailure = failure(source, q, retrievedAt, error);
+      if (!error.retryable || attempt === WIKIDATA_MAX_RETRIES) return lastFailure;
+      await sleep(WIKIDATA_RETRY_DELAY_MS * 2 ** attempt);
+      continue;
+    }
+
+    const parsed = readWikidataItems(source, q, retrievedAt, response.payload);
+    if (parsed.ok || !parsed.error?.retryable || attempt === WIKIDATA_MAX_RETRIES) {
+      return parsed;
+    }
+    lastFailure = parsed;
+    await sleep(WIKIDATA_RETRY_DELAY_MS * 2 ** attempt);
+  }
+
+  return (
+    lastFailure ??
+    failure(source, q, retrievedAt, {
+      code: "provider_error",
+      message: "Wikidata no respondió.",
+      retryable: true,
+    })
   );
+}
 
-  if (!response.ok) return failure(source, q, retrievedAt, response.error);
+function nestedText(value: unknown, key: "label" | "description"): unknown {
+  if (!isRecord(value)) return undefined;
+  const display = isRecord(value.display) ? value.display : undefined;
+  const field = display && isRecord(display[key]) ? display[key] : undefined;
+  return field && "value" in field ? field.value : undefined;
+}
 
-  const payload = response.payload;
+function wikidataLabel(entry: Record<string, unknown>, id: string): string {
+  const match = isRecord(entry.match) ? entry.match.text : undefined;
+  for (const candidate of [entry.label, nestedText(entry, "label"), match, entry.title]) {
+    const text = cleanText(candidate, 200);
+    if (!text || text === id || /^Q\d+$/.test(text)) continue;
+    return text;
+  }
+  return "";
+}
+
+function wikidataDescription(entry: Record<string, unknown>): string {
+  return cleanText(entry.description ?? nestedText(entry, "description"), 500);
+}
+
+function readWikidataItems(
+  source: GeneralSource,
+  query: string,
+  retrievedAt: string,
+  payload: unknown,
+): GeneralSearchResult {
   if (!isRecord(payload)) {
-    return failure(source, q, retrievedAt, {
+    return failure(source, query, retrievedAt, {
       code: "invalid_response",
       message: "Wikidata devolvió una respuesta vacía.",
     });
   }
 
   if (payload.error !== undefined) {
-    return failure(source, q, retrievedAt, {
+    return failure(source, query, retrievedAt, {
       code: "provider_error",
       message: providerMessage(payload, "Wikidata rechazó la búsqueda."),
+      retryable: true,
     });
   }
 
@@ -601,10 +669,10 @@ export async function searchWikidata(
     if (!isRecord(entry)) continue;
 
     const id = typeof entry.id === "string" ? entry.id.trim() : "";
-    const title = cleanText(entry.title ?? entry.label, 200);
+    const title = wikidataLabel(entry, id);
     if (!id || !title) continue;
 
-    const snippet = cleanText(entry.description, 500);
+    const snippet = wikidataDescription(entry);
 
     items.push({
       id,
@@ -616,7 +684,7 @@ export async function searchWikidata(
     });
   }
 
-  return { ok: true, source, query: q, items, retrievedAt };
+  return { ok: true, source, query, items, retrievedAt };
 }
 
 /**
@@ -907,8 +975,10 @@ export async function callOpenRouter(
           code: error.code,
           message: error.message,
         });
-        lastError = error;
-        break;
+        lastError = { ...error, retryable: true };
+        if (attempt === retries) break;
+        await sleep(retryDelayMs * 2 ** attempt);
+        continue;
       }
 
       const text = extractOpenRouterText(payload);
@@ -916,6 +986,7 @@ export async function callOpenRouter(
         const error: GeneralError = {
           code: "empty_text",
           message: `El modelo ${model} no devolvió texto.`,
+          retryable: true,
         };
         attempts.push({
           model,
@@ -924,7 +995,9 @@ export async function callOpenRouter(
           message: error.message,
         });
         lastError = error;
-        break;
+        if (attempt === retries) break;
+        await sleep(retryDelayMs * 2 ** attempt);
+        continue;
       }
 
       const usage = extractOpenRouterUsage(payload);

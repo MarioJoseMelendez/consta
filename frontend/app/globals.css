@@ -5310,16 +5310,26 @@ code {
   text-transform: uppercase;
 }
 
-.identity-field-status[data-status="found"] {
+.identity-field-status[data-status="found"],
+.identity-field-status[data-status="corroborated"] {
   color: var(--lime-dark);
 }
 
 .identity-field-status[data-status="alleged"],
-.identity-field-status[data-status="conflicting"] {
+.identity-field-status[data-status="conflicting"],
+.identity-field-status[data-status="probable"] {
   color: var(--orange);
 }
 
 .identity-field-status[data-status="not_found"] {
+  color: var(--paper-muted);
+}
+
+.identity-note {
+  display: block;
+  margin: 0.25rem 0 0;
+  font-size: 0.88rem;
+  line-height: 1.35;
   color: var(--paper-muted);
 }
 
@@ -5398,5 +5408,77 @@ code {
 
   .identity-submit {
     justify-self: stretch;
+  }
+}
+
+body:has(.identity-screen) .site-footer {
+  display: none;
+}
+
+.identity-screen {
+  display: grid;
+  grid-template-columns: minmax(280px, 400px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: 1.25rem 1.75rem;
+  align-items: start;
+  width: var(--shell);
+  height: calc(100dvh - 88px);
+  margin-inline: auto;
+  padding-block: 1.15rem 1rem;
+  overflow: hidden;
+}
+
+.identity-screen .identity-form {
+  max-width: none;
+  max-height: 100%;
+  margin-top: 0;
+  overflow: auto;
+}
+
+.identity-screen .identity-panel {
+  width: auto;
+  height: 100%;
+  min-height: 0;
+  max-height: 100%;
+  margin: 0;
+  padding-bottom: 0.5rem;
+  overflow: auto;
+}
+
+.identity-screen .identity-head h2 {
+  max-width: none;
+  margin-top: 0.35rem;
+  font-size: clamp(1.45rem, 2vw, 1.9rem);
+}
+
+.identity-screen .identity-candidates {
+  grid-template-columns: minmax(0, 1fr);
+  margin-top: 0.85rem;
+}
+
+.identity-screen .identity-profile-head h3 {
+  font-size: clamp(1.35rem, 2vw, 1.8rem);
+}
+
+.identity-trace .identity-tool,
+.identity-search .identity-tool {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--lime);
+}
+
+@media (max-width: 900px) {
+  .identity-screen {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+    overflow: visible;
+  }
+
+  .identity-screen .identity-panel {
+    max-height: none;
+    overflow: visible;
   }
 }
