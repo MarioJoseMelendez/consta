@@ -54,8 +54,38 @@ import { confidenceForScore, scoreResults, type ResultToScore } from "./sourceSc
 
 export const IDENTITY_NAME_MAX = 200;
 export const IDENTITY_DETAILS_MAX = 2000;
+export const IDENTITY_INTEREST_MAX = 1000;
+
+const PUBLIC_INTEREST_FOCUS =
+  "conexiones de interés público: partidos políticos, fondeo, empresas asociadas y apoyo externo";
+
+function journalistDetailNote(details?: string): string {
+  return details
+    ? `Descripción del periodista, no es evidencia: ${details}`
+    : "Sin descripción adicional.";
+}
+
+/** Foco que el periodista escribe; si falta, la búsqueda va a interés público. */
+export function journalistInterestNote(interest?: string): string {
+  const trimmed = interest?.trim();
+  if (trimmed) {
+    return `Interés de investigación del periodista, no es evidencia: ${trimmed}. Priorízalo cuando haya rastro público; si no lo hay, sigue con ${PUBLIC_INTEREST_FOCUS}.`;
+  }
+  return `Sin interés de investigación específico. Enfócate en ${PUBLIC_INTEREST_FOCUS}.`;
+}
+
+function publicInterestSearchLines(): string[] {
+  return [
+    "En esta vuelta busca conexiones públicas de interés periodístico, con nombres concretos:",
+    "- partidos políticos, movimientos, cargos o militancia;",
+    "- fondeo: donaciones, contratos, licitaciones, patrocinios;",
+    "- empresas asociadas, sociedades, juntas, representantes legales;",
+    "- apoyo externo: ONG, gobiernos, organismos, lobby, campañas.",
+  ];
+}
 
 const MAX_ROUNDS = 3;
+const CONNECTION_ROUNDS = 3;
 const MIN_PLAN_QUERIES = 1;
 const MAX_PLAN_QUERIES = 5;
 const MAX_CANDIDATES = 5;
@@ -193,7 +223,7 @@ const PLAN_SYSTEM = [
   "Eres el planificador de identidad de Consta, una herramienta periodística de registros públicos.",
   "Respondes únicamente con un objeto JSON. No uses markdown ni texto alrededor.",
   "No inventes hechos, identificadores, cargos ni relaciones. Una pista de búsqueda no es un dato ya conocido.",
-  "El nombre y la descripción son la consulta del periodista, no evidencia.",
+  "El nombre, la descripción y el interés de investigación son la consulta del periodista, no evidencia.",
   "Diccionario de herramientas. Usa solo estas. No inventes una tercera:",
   IDENTITY_TOOLS_JSON,
   "Diccionario de datos que debes intentar encontrar. Si un dato no está en la fuente, queda not_found. No inventes el valor:",
@@ -212,7 +242,7 @@ const PLAN_SYSTEM = [
 const ROUND_SYSTEM = [
   "Eres el analista de identidad de Consta. Respondes únicamente con un objeto JSON. No uses markdown.",
   "Solo puedes afirmar lo que esté escrito en los resultados etiquetados de Tavily o Wikidata.",
-  "El nombre y la descripción del periodista orientan la búsqueda y no son una fuente.",
+  "El nombre, la descripción y el interés de investigación del periodista orientan la búsqueda y no son una fuente.",
   "No inventes ni completes datos. Si un campo no está en los resultados, no lo incluyas: queda not_found.",
   "Un candidato es una persona, empresa o institución nombrada en un resultado. No hace falta NIT, DPI ni un perfil completo.",
   "Si un resultado nombra al sujeto, devuélvelo. name queda \"found\" con la URL de ese resultado. Los campos que no aparezcan se omiten y quedan \"not_found\".",
@@ -978,12 +1008,13 @@ function aimPlan(plan: IdentityPlan, name: string): IdentityPlan {
   };
 }
 
-function planPrompt(name: string, details?: string): string {
+function planPrompt(name: string, details?: string, interest?: string): string {
   return [
     `Nombre consultado: ${name}`,
-    details
-      ? `Descripción del periodista, no es evidencia: ${details}`
-      : "Sin descripción adicional.",
+    journalistDetailNote(details),
+    interest
+      ? `Interés de investigación del periodista, no es evidencia: ${interest}. Úsalo solo para desambiguar al sujeto, no para inventar campos.`
+      : "Sin interés de investigación específico.",
     "Diccionario de herramientas. Elige una por consulta. No inventes otra:",
     IDENTITY_TOOLS_JSON,
     "Diccionario de datos que cada consulta debe intentar encontrar. purpose nombra la clave. No inventes los valores:",
@@ -998,6 +1029,7 @@ function planPrompt(name: string, details?: string): string {
 function roundPrompt(input: {
   name: string;
   details?: string;
+  interest?: string;
   round: number;
   searches: IdentityQueryResult[];
   candidates: IdentityCandidate[];
@@ -1005,9 +1037,10 @@ function roundPrompt(input: {
   const missing = formatMissing(missingFieldKeys(input.candidates));
   const lines = [
     `Nombre consultado: ${input.name}`,
-    input.details
-      ? `Descripción del periodista, no es evidencia: ${input.details}`
-      : "Sin descripción adicional.",
+    journalistDetailNote(input.details),
+    input.interest
+      ? `Interés de investigación del periodista, no es evidencia: ${input.interest}. Úsalo solo para desambiguar al sujeto, no para inventar campos.`
+      : "Sin interés de investigación específico.",
     `Ronda ${input.round} de ${MAX_ROUNDS}.`,
     input.round === MAX_ROUNDS
       ? 'Esta es la última ronda. decision.action debe ser "stop" y nextQueries debe ser [].'
@@ -1487,9 +1520,11 @@ async function runInvestigation(
   env: GeneralEnv,
   name: string,
   details?: string,
+  interest?: string,
 ): Promise<IdentityInvestigationResponse> {
   const subject = name.trim();
   const context = details?.trim() || undefined;
+  const focus = interest?.trim() || undefined;
 
   if (!subject) {
     return emptyResult({
@@ -1509,12 +1544,18 @@ async function runInvestigation(
       message: `"details" no puede superar ${IDENTITY_DETAILS_MAX} caracteres.`,
     });
   }
+  if (focus && focus.length > IDENTITY_INTEREST_MAX) {
+    return emptyResult({
+      code: "invalid_parameter",
+      message: `"interest" no puede superar ${IDENTITY_INTEREST_MAX} caracteres.`,
+    });
+  }
 
   const planCall = await callOpenRouter(
     env,
     [
       { role: "system", content: PLAN_SYSTEM },
-      { role: "user", content: planPrompt(subject, context) },
+      { role: "user", content: planPrompt(subject, context, focus) },
     ],
     modelCallOptions(env, PLAN_MAX_TOKENS),
   );
@@ -1571,6 +1612,7 @@ async function runInvestigation(
           content: roundPrompt({
             name: subject,
             details: context,
+            interest: focus,
             round,
             searches,
             candidates,
@@ -1807,14 +1849,16 @@ function mergeExtraCandidates(
 function extraPrompt(input: {
   name: string;
   details?: string;
+  interest?: string;
   searches: IdentityQueryResult[];
   candidates: IdentityCandidate[];
 }): string {
   const lines = [
     `Nombre consultado: ${input.name}`,
-    input.details
-      ? `Descripción del periodista, no es evidencia: ${input.details}`
-      : "Sin descripción adicional.",
+    journalistDetailNote(input.details),
+    input.interest
+      ? `Interés de investigación del periodista, no es evidencia: ${input.interest}. Úsalo solo para desambiguar al sujeto, no para inventar campos.`
+      : "Sin interés de investigación específico.",
     "Búsqueda extra. Completa solo NIT, teléfono, correo, representante legal, dirección y documento nacional.",
     "Una dirección de oficina vale. Si lo es, escribe note. Si no hace falta aclarar, omite note.",
     "No inventes valores. Si el resultado no trae el dato, omite el campo.",
@@ -1854,9 +1898,11 @@ export async function requestExtraIdentitySearch(
   name: string,
   details: string | undefined,
   current: IdentityInvestigation,
+  interest?: string,
 ): Promise<IdentityInvestigationResponse> {
   const subject = name.trim();
   const context = details?.trim() || undefined;
+  const focus = interest?.trim() || undefined;
   if (!subject) {
     return emptyResult({ code: "missing_parameter", message: 'Se requiere "name".' });
   }
@@ -1895,6 +1941,7 @@ export async function requestExtraIdentitySearch(
         content: extraPrompt({
           name: subject,
           details: context,
+          interest: focus,
           searches,
           candidates: current.candidates,
         }),
@@ -1943,9 +1990,10 @@ export async function investigateIdentity(
   env: GeneralEnv,
   name: string,
   details?: string,
+  interest?: string,
 ): Promise<IdentityInvestigationResponse> {
   try {
-    return await runInvestigation(env, name, details);
+    return await runInvestigation(env, name, details, interest);
   } catch (error) {
     console.error(
       "[consta-api] identity",
@@ -2456,6 +2504,35 @@ export function connectionBranches(
   };
 }
 
+/** Tres tiempos dentro del mismo loop, no una tercera fase de producto. */
+export type ConnectionRoundBeat = "expand-subject" | "expand-second" | "close-subject";
+
+export function connectionRoundBeat(round: number): ConnectionRoundBeat {
+  if (round <= 1) return "expand-subject";
+  if (round === 2) return "expand-second";
+  return "close-subject";
+}
+
+/**
+ * La vuelta 3 solo corre si hay ramas abiertas: nombres de segundo salto
+ * que se puedan cruzar con el sujeto. Sin eso el loop se queda en dos.
+ */
+export function canContinueConnectionLoop(input: {
+  finishedRound: number;
+  hasNewClaims: boolean;
+  openCount: number;
+}): boolean {
+  if (!input.hasNewClaims) return false;
+  if (input.finishedRound >= CONNECTION_ROUNDS) return false;
+  if (
+    connectionRoundBeat(input.finishedRound + 1) === "close-subject" &&
+    input.openCount === 0
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function readConnectionClaimConfidence(claim: RawConnectionClaim, sources: IdentitySourceRef[]): IdentityConfidence {
   const uniqueSources = new Set<string>();
   for (const source of sources) {
@@ -2482,12 +2559,14 @@ function readConnectionClaimScore(claim: RawConnectionClaim, sources: IdentitySo
 function buildConnectionSummaryPrompt(input: {
   name: string;
   details?: string;
+  interest?: string;
   who: string;
   claims: readonly IdentityClaim[];
 }): string {
   const lines = [
     `Nombre consultado: ${input.name}`,
-    input.details ? `Descripción del periodista, no es evidencia: ${input.details}` : "Sin descripción adicional.",
+    journalistDetailNote(input.details),
+    journalistInterestNote(input.interest),
     `Contexto del sujeto: ${input.who || "Sin contexto."}`,
     "Afirmaciones acumuladas:",
   ];
@@ -2525,6 +2604,7 @@ function buildConnectionSummary(input: {
 function buildConnectionQueriesPrompt(input: {
   name: string;
   details?: string;
+  interest?: string;
   who: string;
   rootText: string;
   claims: readonly IdentityClaim[];
@@ -2538,7 +2618,8 @@ function buildConnectionQueriesPrompt(input: {
 }): string {
   const lines = [
     `Nombre consultado: ${input.name}`,
-    input.details ? `Descripción del periodista, no es evidencia: ${input.details}` : "Sin descripción adicional.",
+    journalistDetailNote(input.details),
+    journalistInterestNote(input.interest),
     `Contexto del sujeto: ${input.who || "Sin contexto."}`,
     `Afirmación raíz: ${input.rootText}`,
     "Afirmaciones acumuladas:",
@@ -2561,14 +2642,38 @@ function buildConnectionQueriesPrompt(input: {
       branches.open.join(", ") || "ninguna"
     }.`,
   );
-  if (branches.open.length > 0) {
+  lines.push("", ...publicInterestSearchLines());
+  const beat = connectionRoundBeat(input.round);
+  const branch = input.branch?.label ?? input.branch?.entityId ?? input.branch?.claimId;
+  if (branch) {
     lines.push(
-      "Esta vuelta debe intentar cerrar al menos una rama abierta: busca el vínculo entre esa identidad y el sujeto (familiar, societario, laboral, contractual o político).",
-      "Si la evidencia pública no permite cerrarla, dilo en purpose y no sigas profundizando por esa rama.",
+      "",
+      `Rama elegida por el periodista: ${branch}.`,
+      "Esta vuelta no sigue el tiempo automático (primer grado / segundo salto / cierre). El periodista pidió profundizar aquí.",
+      "Todas las consultas deben partir de esa identidad o afirmación. No reabras el sujeto en general.",
+      "Aplica el interés de investigación y las conexiones de interés público a esa rama.",
+      "Si la fuente une esa rama con el sujeto, incluye también esa consulta de cierre.",
+      "No gastes las cinco consultas en un solo tipo de pista. Si no hay rastro público, action es \"stop\" y nextQueries es [].",
+    );
+  } else if (beat === "expand-subject") {
+    lines.push(
+      "Vuelta 1: solo primer grado. Busca personas y organizaciones unidas directamente al sujeto.",
+      "No profundices en las relaciones de esas identidades entre sí. No combines dos nombres ajenos al sujeto.",
+    );
+  } else if (beat === "expand-second") {
+    lines.push(
+      "Vuelta 2: un salto más. Parte de las identidades ya conectadas con el sujeto y busca con quién más se unen (familiar, societario, laboral, contractual o político).",
+      "Esas cadenas quedan como ramas abiertas. No gastes consultas en cerrarlas todavía contra el sujeto.",
+    );
+  } else if (branches.open.length > 0) {
+    lines.push(
+      "Vuelta 3: solo cierre. Hay ramas abiertas con nombres concretos.",
+      "Cada consulta debe combinar el nombre de una rama abierta con el del sujeto, para ver si hay un vínculo público (familiar, societario, laboral, contractual o político).",
+      "No amplíes la red. No busques un tercer salto. Si no hay forma pública de cruzar esos nombres, action es \"stop\" y nextQueries es [].",
     );
   } else {
     lines.push(
-      "Si una consulta conecta dos identidades entre sí, la vuelta siguiente debe intentar devolver esa cadena al sujeto.",
+      "Vuelta 3: no hay ramas abiertas que cruzar con el sujeto. action es \"stop\" y nextQueries es [].",
     );
   }
 
@@ -2577,19 +2682,12 @@ function buildConnectionQueriesPrompt(input: {
   for (const query of input.priorQueries) {
     lines.push(`- ${query.tool ?? "*"}: ${query.query}`);
   }
-  const branch = input.branch?.label ?? input.branch?.entityId ?? input.branch?.claimId;
-  if (branch) {
-    lines.push(
-      "",
-      `Rama elegida por el periodista: ${branch}.`,
-      "Todas las consultas de esta vuelta deben seguir esa rama: la entidad o la afirmación indicada, no el sujeto en general.",
-      "Antes de ampliarla, intenta cerrarla contra el sujeto: busca el vínculo directo entre esa identidad y el sujeto.",
-    );
-  }
   lines.push(
     "",
-    `Ronda ${input.round} de ${MAX_ROUNDS}.`,
-    "Propón de 3 a 5 búsquedas nuevas que sigan una conexión concreta de las afirmaciones o del contexto.",
+    `Ronda ${input.round} de ${CONNECTION_ROUNDS}.`,
+    branch
+      ? "Propón de 3 a 5 búsquedas nuevas sobre la rama elegida."
+      : "Propón de 3 a 5 búsquedas nuevas que sigan el tiempo de esta ronda.",
     "Devuelve solo el JSON con queries.",
   );
   return lines.join("\n");
@@ -2624,15 +2722,23 @@ function buildConnectionEntitiesPrompt(input: {
 function buildConnectionClaimsPrompt(input: {
   name: string;
   details?: string;
+  interest?: string;
   who: string;
   rootText: string;
   claims: readonly IdentityClaim[];
   entities: readonly IdentityEntity[];
   items: readonly IdentitySearchItem[];
+  round: number;
+  branch?: {
+    entityId?: string;
+    claimId?: string;
+    label?: string;
+  };
 }): string {
   const lines = [
     `Nombre consultado: ${input.name}`,
-    input.details ? `Descripción del periodista, no es evidencia: ${input.details}` : "Sin descripción adicional.",
+    journalistDetailNote(input.details),
+    journalistInterestNote(input.interest),
     `Contexto del sujeto: ${input.who || "Sin contexto."}`,
     `Afirmación raíz: ${input.rootText}`,
     "Afirmaciones acumuladas:",
@@ -2645,6 +2751,8 @@ function buildConnectionClaimsPrompt(input: {
     input.claims.find((claim) => claim.id === "root")?.entities[0]?.label ??
     input.name;
   const branches = connectionBranches(input.claims, subjectLabel);
+  const beat = connectionRoundBeat(input.round);
+  const branch = input.branch?.label ?? input.branch?.entityId ?? input.branch?.claimId;
   lines.push(
     "",
     "Estado de la red:",
@@ -2655,8 +2763,23 @@ function buildConnectionClaimsPrompt(input: {
     "Redacta cada afirmación con su origen y su destino. Si la fuente une A con B, escribe la relación entre A y B.",
     "Si además la fuente une B con el sujeto, escríbelo en otra afirmación que nombre al sujeto y la relación.",
     "Si la fuente solo conecta dos identidades entre sí, no atribuyas esa relación al sujeto: la rama queda abierta.",
-    "Si la evidencia de esta vuelta cierra una rama abierta contra el sujeto, esa afirmación es la más importante: redáctala nombrando al sujeto.",
+    "Si la fuente nombra partido, fondeo, empresa asociada o apoyo externo, escríbelo como afirmación con origen y destino.",
   );
+  if (branch) {
+    lines.push(
+      `El periodista pidió profundizar en ${branch}.`,
+      "Prioriza afirmaciones de esa rama: partidos, fondeo, empresas asociadas, apoyo externo, y el cierre contra el sujeto solo si la fuente lo dice.",
+      "No atribuyas al sujeto lo que la fuente solo afirma de la rama.",
+    );
+  } else if (beat === "close-subject") {
+    lines.push(
+      "Esta vuelta solo busca el cierre: la afirmación más importante nombra al sujeto y a la identidad de la rama abierta.",
+    );
+  } else {
+    lines.push(
+      "Si la evidencia de esta vuelta cierra una rama abierta contra el sujeto, esa afirmación es la más importante: redáctala nombrando al sujeto.",
+    );
+  }
 
   lines.push("", "Entidades identificadas en esta vuelta:");
   if (input.entities.length === 0) lines.push("Ninguna.");
@@ -2676,13 +2799,14 @@ function buildConnectionClaimsPrompt(input: {
 const CONNECTION_PLAN_SYSTEM = [
   "Eres el planificador de conexiones de Consta. Respondes únicamente con un objeto JSON. No uses markdown.",
   "Solo puedes afirmar lo que esté escrito en las afirmaciones acumuladas o en el contexto del sujeto.",
-  "El nombre y la descripción son la consulta del periodista, no evidencia.",
+  "El nombre, la descripción y el interés de investigación son la consulta del periodista, no evidencia.",
   "No inventes ni completes datos. Si no hay pistas públicas para seguir, action es \"stop\" y nextQueries es [].",
   "Diccionario de herramientas. Usa solo estas. No inventes una tercera:",
   IDENTITY_TOOLS_JSON,
-  "Propón de 3 a 5 consultas que sigan una conexión concreta de las afirmaciones o del contexto.",
-  "Trabaja en dos frentes. Primero, cierra las ramas abiertas: toda identidad que solo aparece conectada con otra identidad debe tener una consulta que busque su vínculo con el sujeto (familiar, societario, laboral, contractual o político).",
-  "Segundo, amplía la red: busca vínculos entre las identidades ya conectadas y personas u organizaciones nuevas.",
+  "Hay tres tiempos en el mismo loop. La vuelta 1 solo busca conexiones directas del sujeto. La vuelta 2 busca un salto más desde esas identidades. La vuelta 3, si hay ramas abiertas con nombres concretos, solo cruza esos nombres con el sujeto. No mezcles los tres tiempos.",
+  "En cada vuelta busca conexiones de interés público: partidos, fondeo, empresas asociadas, apoyo externo. Si el periodista escribió un interés de investigación, priorízalo.",
+  "Si el mensaje nombra una rama elegida por el periodista, ignora el tiempo de la ronda y sigue solo esa rama, con el mismo foco de interés público.",
+  "Sigue las instrucciones de la ronda en el mensaje del usuario.",
   "Una relación entre dos identidades no es una relación con el sujeto. Si la fuente no une la última conexión con el sujeto, la rama queda abierta.",
   "Si una rama abierta no tiene evidencia pública que la una al sujeto, dilo en purpose y no sigas profundizando por ella.",
   "Cada nextQuery lleva \"query\", \"purpose\" y \"tool\": \"wikidata\" o \"tavily\". purpose describe la conexión o afirmación a explorar, no un campo de perfil.",
@@ -2696,6 +2820,7 @@ const CONNECTION_ENTITY_SYSTEM = [
   "Solo puedes afirmar lo que esté escrito en los resultados de la búsqueda.",
   "El nombre consultado es el sujeto de la investigación. No lo incluyas en entities.",
   "Incluye personas y organizaciones que la afirmación necesite para conectar al sujeto con alguien más: familiares, socios, funcionarios, empresas, ministerios.",
+  "Incluye también partidos, fondos, empresas asociadas, organismos de apoyo y las personas que los representen, cuando la fuente los nombre.",
   "Incluye también las entidades que aparecen conectadas con otra entidad ya conocida, aunque la fuente no las una al sujeto.",
   "Cada entidad lleva id, label, type, description e indexes. type es person o enterprise; indexes cita los números de las fuentes.",
   'Devuelve solo el JSON con entities: {"entities":[...]}. Si no hay entidades distintas al sujeto, entities es [].',
@@ -2704,10 +2829,11 @@ const CONNECTION_ENTITY_SYSTEM = [
 const CONNECTION_CLAIM_SYSTEM = [
   "Eres el razonador de conexiones de Consta. Respondes únicamente con un objeto JSON. No uses markdown.",
   "Solo puedes afirmar lo que esté escrito en las fuentes numeradas de esta vuelta.",
-  "El nombre y la descripción son la consulta del periodista, no evidencia.",
+  "El nombre, la descripción y el interés de investigación son la consulta del periodista, no evidencia.",
   "No inventes ni completes datos. Si no hay afirmaciones nuevas, claims es [].",
   "Cada claim lleva \"text\", \"parentText\" e \"indexes\": una lista de números de las fuentes numeradas de esta vuelta.",
-  "El texto debe nombrar a las personas y organizaciones de la fuente y la relación cuando la fuente la diga: hermano, socia, ministro, representante legal, empleado.",
+  "El texto debe nombrar a las personas y organizaciones de la fuente y la relación cuando la fuente la diga: hermano, socia, ministro, representante legal, empleado, militante, donante, contratista, patrocinador.",
+  "Si la fuente nombra partido, fondeo, empresa asociada o apoyo externo, escríbelo como afirmación con origen y destino.",
   "Cada claim debe dejar claro el origen y el destino de la relación. No atribuyas al sujeto una relación que la fuente solo afirma entre otras dos personas.",
   "Si la fuente une dos identidades entre sí y no con el sujeto, escríbelo así: la cadena queda abierta.",
   "Si la fuente cierra esa cadena con el sujeto, redacta otra afirmación que nombre al sujeto y la relación; esa es la conexión que se busca.",
@@ -2718,7 +2844,7 @@ const CONNECTION_CLAIM_SYSTEM = [
 const CONNECTION_SUMMARY_SYSTEM = [
   "Eres el resumidor de conexiones de Consta. Respondes únicamente con un objeto JSON. No uses markdown.",
   "Solo puedes afirmar lo que esté escrito en las afirmaciones acumuladas.",
-  "El nombre y la descripción son la consulta del periodista, no evidencia.",
+  "El nombre, la descripción y el interés de investigación son la consulta del periodista, no evidencia.",
   "Distingue las conexiones directas con el sujeto de las cadenas entre identidades. Si una cadena no cierra en el sujeto, dilo sin presentarla como conexión del sujeto.",
   "Devuelve solo el JSON con findings: una lista de frases en texto plano, no de objetos.",
 ].join("\n");
@@ -2728,13 +2854,12 @@ const CONNECTION_ENTITY_MAX_TOKENS = 2_000;
 const CONNECTION_CLAIM_MAX_TOKENS = 4_500;
 const CONNECTION_SUMMARY_MAX_TOKENS = 2_000;
 
-const CONNECTION_ROUNDS = 3;
-
 async function runConnectionRound(
   env: GeneralEnv,
   input: {
     name: string;
     details?: string;
+    interest?: string;
     candidate: IdentityCandidate;
     state: IdentityConnectionState;
     subject: IdentityEntity;
@@ -2746,11 +2871,30 @@ async function runConnectionRound(
     };
   },
 ): Promise<IdentityConnectionsResponse> {
-  const { state, candidate, name, details, who, branchContext } = input;
+  const { state, candidate, name, details, interest, who, branchContext } = input;
   const round = state.rounds.length + 1;
   const rootText =
     state.claims.find((claim) => claim.id === "root")?.text ??
     `El sujeto investigado es ${candidateLabel(candidate, name)}.`;
+  const subjectLabel =
+    state.claims.find((claim) => claim.id === "root")?.entities[0]?.label ?? name;
+  const hasJournalistBranch = Boolean(
+    branchContext?.entityId || branchContext?.claimId || branchContext?.label,
+  );
+
+  // La vuelta de cierre no se paga si no hay nombres de segundo salto
+  // que cruzar con el sujeto. El periodista que elige una rama sí entra.
+  if (
+    !hasJournalistBranch &&
+    connectionRoundBeat(round) === "close-subject" &&
+    connectionBranches(state.claims, subjectLabel).open.length === 0
+  ) {
+    return {
+      ...state,
+      canContinue: false,
+      stoppedReason: "sin ramas abiertas que cruzar con el sujeto",
+    };
+  }
 
   const priorKeys = new Set<string>();
   const priorQueries: IdentityToolQuery[] = [];
@@ -2772,6 +2916,7 @@ async function runConnectionRound(
         content: buildConnectionQueriesPrompt({
           name,
           details,
+          interest,
           who,
           rootText,
           claims: state.claims,
@@ -2944,11 +3089,14 @@ async function runConnectionRound(
         content: buildConnectionClaimsPrompt({
           name,
           details,
+          interest,
           who,
           rootText,
           claims: priorClaims,
           entities,
           items,
+          round,
+          branch: branchContext,
         }),
       },
     ],
@@ -3027,6 +3175,7 @@ async function runConnectionRound(
         content: buildConnectionSummaryPrompt({
           name,
           details,
+          interest,
           who,
           claims: [...priorClaims, ...claims],
         }),
@@ -3107,9 +3256,16 @@ async function runConnectionRound(
   );
 
   const whoText = summary.who || state.summary.who;
+  const accumulated = [...priorClaims, ...newClaims];
+  const openCount = connectionBranches(accumulated, subjectLabel).open.length;
+  const canContinue = canContinueConnectionLoop({
+    finishedRound: round,
+    hasNewClaims: newClaims.length > 0,
+    openCount,
+  });
   const newState = {
     ...state,
-    claims: [...priorClaims, ...newClaims],
+    claims: accumulated,
     rounds: [
       ...state.rounds,
       {
@@ -3119,19 +3275,25 @@ async function runConnectionRound(
         entities,
         claims: newClaims,
         reason: summary.findings,
-        stopped: round >= CONNECTION_ROUNDS,
+        stopped: !canContinue,
       },
     ],
     summary: {
       who: whoText,
       findings: summary.findings,
       text: `${whoText} ${summary.findings}`.trim(),
-      claims: [...priorClaims, ...newClaims].filter(
+      claims: accumulated.filter(
         (claim) => claim.confidence !== "uncertain",
       ).length,
     },
-    canContinue: newClaims.length > 0 && round < CONNECTION_ROUNDS,
-    stoppedReason: newClaims.length === 0 ? "sin afirmaciones nuevas" : null,
+    canContinue,
+    stoppedReason: !canContinue
+      ? newClaims.length === 0
+        ? "sin afirmaciones nuevas"
+        : openCount === 0 && round < CONNECTION_ROUNDS
+          ? "sin ramas abiertas que cruzar con el sujeto"
+          : null
+      : null,
   };
 
   return newState;
@@ -3159,6 +3321,7 @@ export async function investigateIdentityConnections(
 ): Promise<IdentityConnectionsResponse> {
   const name = request.name.trim();
   const details = request.details?.trim() || undefined;
+  const interest = request.interest?.trim() || undefined;
   const candidates = Array.isArray(request.investigation?.candidates)
     ? request.investigation.candidates
     : [];
@@ -3244,6 +3407,7 @@ export async function investigateIdentityConnections(
     return await runConnectionRound(env, {
       name,
       details,
+      interest,
       candidate,
       state,
       subject,

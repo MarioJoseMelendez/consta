@@ -246,21 +246,26 @@ export async function investigateIdentity(
   input: IdentityInvestigationRequest,
 ): Promise<IdentityInvestigationResponse> {
   const details = input.details?.trim();
+  const interest = input.interest?.trim();
   return postIdentity("/identity/investigate", {
     name: input.name.trim(),
     ...(details ? { details } : {}),
+    ...(interest ? { interest } : {}),
   });
 }
 
 export async function requestMoreIdentity(input: {
   name: string;
   details?: string;
+  interest?: string;
   investigation: IdentityInvestigation;
 }): Promise<IdentityInvestigationResponse> {
   const details = input.details?.trim();
+  const interest = input.interest?.trim();
   return postIdentity("/identity/more", {
     name: input.name.trim(),
     ...(details ? { details } : {}),
+    ...(interest ? { interest } : {}),
     investigation: input.investigation,
   });
 }
@@ -271,6 +276,7 @@ export async function requestIdentityConnections(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), CONNECTION_TIMEOUT_MS);
   const details = input.details?.trim();
+  const interest = input.interest?.trim();
 
   try {
     const response = await fetch(`${API_BASE}/identity/connections`, {
@@ -284,6 +290,7 @@ export async function requestIdentityConnections(
       body: JSON.stringify({
         name: input.name.trim(),
         ...(details ? { details } : {}),
+        ...(interest ? { interest } : {}),
         investigation: input.investigation,
         candidateId: input.candidateId,
         ...(input.connection ? { connection: input.connection } : {}),

@@ -11,7 +11,13 @@ import test from "node:test";
 
 import type { IdentityClaim, IdentityEntity } from "@consta/contracts";
 
-import { connectionBranches, mentionsEntity } from "../src/identity.ts";
+import {
+  canContinueConnectionLoop,
+  connectionBranches,
+  connectionRoundBeat,
+  journalistInterestNote,
+  mentionsEntity,
+} from "../src/identity.ts";
 
 const subject = "Gustavo Petro";
 
@@ -123,4 +129,47 @@ test("la afirmación que cierra la cadena contra el sujeto quita la rama abierta
   );
   assert.deepEqual(branches.linked, ["Ricardo Bonilla"]);
   assert.deepEqual(branches.open, ["Germán Ávila Plazas"]);
+});
+
+test("connectionRoundBeat: 1 expandir, 2 segundo salto, 3+ cerrar", () => {
+  assert.equal(connectionRoundBeat(1), "expand-subject");
+  assert.equal(connectionRoundBeat(2), "expand-second");
+  assert.equal(connectionRoundBeat(3), "close-subject");
+  assert.equal(connectionRoundBeat(4), "close-subject");
+});
+
+test("canContinueConnectionLoop: ronda 3 solo si hay ramas abiertas", () => {
+  assert.equal(
+    canContinueConnectionLoop({ finishedRound: 1, hasNewClaims: true, openCount: 0 }),
+    true,
+  );
+  assert.equal(
+    canContinueConnectionLoop({ finishedRound: 2, hasNewClaims: true, openCount: 0 }),
+    false,
+  );
+  assert.equal(
+    canContinueConnectionLoop({ finishedRound: 2, hasNewClaims: true, openCount: 1 }),
+    true,
+  );
+  assert.equal(
+    canContinueConnectionLoop({ finishedRound: 2, hasNewClaims: false, openCount: 1 }),
+    false,
+  );
+  assert.equal(
+    canContinueConnectionLoop({ finishedRound: 3, hasNewClaims: true, openCount: 2 }),
+    false,
+  );
+});
+
+test("journalistInterestNote: sin texto cae a interés público", () => {
+  const note = journalistInterestNote();
+  assert.match(note, /interés público/);
+  assert.match(note, /partidos políticos/);
+});
+
+test("journalistInterestNote: el foco del periodista manda, sin ser evidencia", () => {
+  const note = journalistInterestNote("contratos con el Ministerio de Salud");
+  assert.match(note, /contratos con el Ministerio de Salud/);
+  assert.match(note, /no es evidencia/);
+  assert.match(note, /interés público/);
 });

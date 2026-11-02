@@ -42,7 +42,7 @@ interface IdentityContextValue {
   /** Rama que se está profundizando ahora mismo, si hay una. */
   branchLabel: string | null;
   notice: string | null;
-  investigate: (name: string, details: string) => Promise<void>;
+  investigate: (name: string, details: string, interest?: string) => Promise<void>;
   searchMore: () => Promise<void>;
   selectCandidate: (id: string) => void;
   confirmCandidate: (id: string) => void;
@@ -91,6 +91,7 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
   const [branchLabel, setBranchLabel] = useState<string | null>(null);
   const [consultedName, setConsultedName] = useState("");
   const [consultedDetails, setConsultedDetails] = useState("");
+  const [consultedInterest, setConsultedInterest] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const runRef = useRef(0);
 
@@ -106,7 +107,7 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
   }, []);
 
   const investigate = useCallback(
-    async (name: string, details: string) => {
+    async (name: string, details: string, interest = "") => {
       setPhase("loading");
       setError(null);
       setNotice(null);
@@ -114,11 +115,13 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
       resetConnections();
       setConsultedName(name.trim());
       setConsultedDetails(details.trim());
+      setConsultedInterest(interest.trim());
 
       try {
         const response = await investigateIdentity({
           name,
           ...(details.trim() ? { details } : {}),
+          ...(interest.trim() ? { interest } : {}),
         });
         setResult(response);
         setError(response.error?.message ?? null);
@@ -157,6 +160,7 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
       investigation: IdentityInvestigation,
       candidateId: string,
       runId: number,
+      interest = "",
     ) => {
       let state: IdentityConnectionState | null = null;
 
@@ -165,6 +169,7 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
           const response = await requestIdentityConnections({
             name,
             ...(details ? { details } : {}),
+            ...(interest ? { interest } : {}),
             investigation,
             candidateId,
             ...(state ? { connection: state } : {}),
@@ -223,6 +228,7 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
       const response = await requestMoreIdentity({
         name: consultedName,
         ...(consultedDetails ? { details: consultedDetails } : {}),
+        ...(consultedInterest ? { interest: consultedInterest } : {}),
         investigation: result,
       });
       setResult(response);
@@ -259,7 +265,7 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
       );
       setPhase("ready");
     }
-  }, [confirmedId, consultedDetails, consultedName, phase, resetConnections, result]);
+  }, [confirmedId, consultedDetails, consultedInterest, consultedName, phase, resetConnections, result]);
 
   const selectCandidate = useCallback(
     (id: string) => {
@@ -299,9 +305,10 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
         investigationOf(result),
         id,
         runId,
+        consultedInterest,
       );
     },
-    [consultedDetails, consultedName, result, runConnections],
+    [consultedDetails, consultedInterest, consultedName, result, runConnections],
   );
 
   const retryConnections = useCallback(() => {
@@ -323,8 +330,9 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
       investigationOf(result),
       confirmedId,
       runId,
+      consultedInterest,
     );
-  }, [confirmedId, consultedDetails, consultedName, result, runConnections]);
+  }, [confirmedId, consultedDetails, consultedInterest, consultedName, result, runConnections]);
 
   /**
    * Una vuelta suelta que sigue la rama elegida. El backend abre la vuelta
@@ -346,6 +354,7 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
         const response = await requestIdentityConnections({
           name: consultedName,
           ...(consultedDetails ? { details: consultedDetails } : {}),
+          ...(consultedInterest ? { interest: consultedInterest } : {}),
           investigation: investigationOf(result),
           candidateId: confirmedId,
           ...(connection ? { connection } : {}),
@@ -382,7 +391,7 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
         setConnectionPhase("error");
       }
     },
-    [confirmedId, connection, connectionPhase, consultedDetails, consultedName, result],
+    [confirmedId, connection, connectionPhase, consultedDetails, consultedInterest, consultedName, result],
   );
 
   const value = useMemo(

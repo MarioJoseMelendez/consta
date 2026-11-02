@@ -20,6 +20,7 @@ import { buildAnalysisRun } from "./analyze";
 import { gtBaseUrl, gtGet } from "./gt";
 import {
   IDENTITY_DETAILS_MAX,
+  IDENTITY_INTEREST_MAX,
   IDENTITY_NAME_MAX,
   investigateIdentity,
   investigateIdentityConnections,
@@ -522,9 +523,13 @@ app.post("/identity/investigate", async (c) => {
   if (body.details !== undefined && typeof body.details !== "string") {
     return c.json(apiError("invalid_parameter", '"details" debe ser una cadena.'), 400);
   }
+  if (body.interest !== undefined && typeof body.interest !== "string") {
+    return c.json(apiError("invalid_parameter", '"interest" debe ser una cadena.'), 400);
+  }
 
   const name = body.name.trim();
   const details = typeof body.details === "string" ? body.details.trim() : undefined;
+  const interest = typeof body.interest === "string" ? body.interest.trim() : undefined;
 
   if (!name) {
     return c.json(apiError("missing_parameter", 'Se requiere "name".'), 400);
@@ -544,8 +549,17 @@ app.post("/identity/investigate", async (c) => {
       400,
     );
   }
+  if (interest && interest.length > IDENTITY_INTEREST_MAX) {
+    return c.json(
+      apiError(
+        "invalid_parameter",
+        `"interest" no puede superar ${IDENTITY_INTEREST_MAX} caracteres.`
+      ),
+      400,
+    );
+  }
 
-  const result = await investigateIdentity(c.env, name, details || undefined);
+  const result = await investigateIdentity(c.env, name, details || undefined, interest || undefined);
   const hasWork =
     result.plan.queries.length > 0 ||
     result.rounds.length > 0 ||
@@ -579,6 +593,9 @@ app.post("/identity/more", async (c) => {
   if (body.details !== undefined && typeof body.details !== "string") {
     return c.json(apiError("invalid_parameter", '"details" debe ser una cadena.'), 400);
   }
+  if (body.interest !== undefined && typeof body.interest !== "string") {
+    return c.json(apiError("invalid_parameter", '"interest" debe ser una cadena.'), 400);
+  }
   const investigation = body.investigation;
   if (
     !isRecord(investigation) ||
@@ -594,6 +611,7 @@ app.post("/identity/more", async (c) => {
 
   const name = body.name.trim();
   const details = typeof body.details === "string" ? body.details.trim() : undefined;
+  const interest = typeof body.interest === "string" ? body.interest.trim() : undefined;
   if (name.length > IDENTITY_NAME_MAX) {
     return c.json(
       apiError("invalid_parameter", `"name" no puede superar ${IDENTITY_NAME_MAX} caracteres.`),
@@ -609,12 +627,22 @@ app.post("/identity/more", async (c) => {
       400,
     );
   }
+  if (interest && interest.length > IDENTITY_INTEREST_MAX) {
+    return c.json(
+      apiError(
+        "invalid_parameter",
+        `"interest" no puede superar ${IDENTITY_INTEREST_MAX} caracteres.`
+      ),
+      400,
+    );
+  }
 
   const result = await requestExtraIdentitySearch(
     c.env,
     name,
     details || undefined,
     investigation as unknown as IdentityInvestigation,
+    interest || undefined,
   );
   if (result.error?.code === "extra_limit") {
     return c.json(apiError(result.error.code, result.error.message), 400);
@@ -638,6 +666,9 @@ app.post("/identity/connections", async (c) => {
   }
   if (body.details !== undefined && typeof body.details !== "string") {
     return c.json(apiError("invalid_parameter", '"details" debe ser una cadena.'), 400);
+  }
+  if (body.interest !== undefined && typeof body.interest !== "string") {
+    return c.json(apiError("invalid_parameter", '"interest" debe ser una cadena.'), 400);
   }
   if (typeof body.candidateId !== "string" || !body.candidateId.trim()) {
     return c.json(apiError("missing_parameter", 'Se requiere "candidateId".'), 400);
@@ -693,6 +724,7 @@ app.post("/identity/connections", async (c) => {
 
   const name = body.name.trim();
   const details = typeof body.details === "string" ? body.details.trim() : undefined;
+  const interest = typeof body.interest === "string" ? body.interest.trim() : undefined;
 
   if (!name) {
     return c.json(apiError("missing_parameter", 'Se requiere "name".'), 400);
@@ -712,10 +744,20 @@ app.post("/identity/connections", async (c) => {
       400,
     );
   }
+  if (interest && interest.length > IDENTITY_INTEREST_MAX) {
+    return c.json(
+      apiError(
+        "invalid_parameter",
+        `"interest" no puede superar ${IDENTITY_INTEREST_MAX} caracteres.`
+      ),
+      400,
+    );
+  }
 
   const result = await investigateIdentityConnections(c.env, {
     name,
     details: details || undefined,
+    interest: interest || undefined,
     investigation: investigation as unknown as IdentityInvestigation,
     candidateId: body.candidateId.trim(),
     connection: connection as IdentityConnectionState | undefined,

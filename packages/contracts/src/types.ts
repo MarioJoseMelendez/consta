@@ -317,6 +317,8 @@ export interface IdentityInvestigation {
 export interface IdentityInvestigationRequest {
   name: string;
   details?: string;
+  /** Foco del periodista; si falta, las conexiones van a interés público. */
+  interest?: string;
 }
 
 export interface IdentityInvestigationResponse extends IdentityInvestigation {
@@ -394,6 +396,8 @@ export interface IdentityConnectionState {
 export interface IdentityConnectionsRequest {
   name: string;
   details?: string;
+  /** Foco del periodista; si falta, las conexiones van a interés público. */
+  interest?: string;
   investigation: IdentityInvestigation;
   candidateId: string;
   connection?: IdentityConnectionState;

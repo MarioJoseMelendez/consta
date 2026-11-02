@@ -66,9 +66,9 @@ bundle sin publicar. `wrangler dev` carga variables desde `.dev.vars`; usa
 | `GET` | `/tools/get_evidence?ids=a,b` | `{ items: Evidence[] }`. Sin `ids` devuelve toda la evidencia demo. |
 | `GET` | `/tools/get_document?id=` | Metadatos `{ id, title, url, license, content_type }` de una evidencia. `404` si no existe. |
 | `POST` | `/analyze` | `AnalysisRun` demo. Acepta `{ entityId?, query?, depth? }`. |
-| `POST` | `/identity/investigate` | Investigación de identidad. Acepta `{ name, details? }` y devuelve `{ plan, rounds, candidates }`. No lleva `X-Consta-Demo`. |
-| `POST` | `/identity/more` | Hasta dos búsquedas extra. Acepta `{ name, details?, investigation }` y busca NIT, teléfono, correo, representante legal, dirección y documento nacional. |
-| `POST` | `/identity/connections` | Una vuelta del loop de conexiones sobre un candidato confirmado. Acepta `{ name, details?, investigation, candidateId, connection?, branchContext }` y devuelve `{ claims, rounds, summary, canContinue, stoppedReason }`.
+| `POST` | `/identity/investigate` | Investigación de identidad. Acepta `{ name, details?, interest? }` y devuelve `{ plan, rounds, candidates }`. No lleva `X-Consta-Demo`. |
+| `POST` | `/identity/more` | Hasta dos búsquedas extra. Acepta `{ name, details?, interest?, investigation }` y busca NIT, teléfono, correo, representante legal, dirección y documento nacional. |
+| `POST` | `/identity/connections` | Una vuelta del loop de conexiones sobre un candidato confirmado. Acepta `{ name, details?, interest?, investigation, candidateId, connection?, branchContext }` y devuelve `{ claims, rounds, summary, canContinue, stoppedReason }`.
 
 ### Ejemplos
 
@@ -87,7 +87,7 @@ curl -X POST "http://localhost:8787/analyze" \
 
 curl -X POST "http://localhost:8787/identity/investigate" \
   -H "Content-Type: application/json" \
-  -d '{"name":"Banco de Guatemala","details":"banco central"}'
+  -d '{"name":"Banco de Guatemala","details":"banco central","interest":"contratos y fondeo"}'
 
 curl -X POST "http://localhost:8787/identity/connections" \
   -H "Content-Type: application/json" \
@@ -131,10 +131,13 @@ código de Tavily u OpenRouter, por ejemplo `missing_api_key`.
 
 ## Identidad
 
-`POST /identity/investigate` resuelve candidatos a partir de un nombre y una
-descripción opcional. El cuerpo es `{ "name": "...", "details": "..." }`.
-`name` es obligatorio y admite hasta 200 caracteres. `details` es opcional y
-admite hasta 2000.
+`POST /identity/investigate` resuelve candidatos a partir de un nombre, una
+descripción opcional y un interés de investigación opcional. El cuerpo es
+`{ "name": "...", "details": "...", "interest": "..." }`.
+`name` es obligatorio y admite hasta 200 caracteres. `details` admite hasta
+2000. `interest` admite hasta 1000: es el foco del periodista, no evidencia.
+Si falta, el loop de conexiones se enfoca en interés público (partidos,
+fondeo, empresas asociadas, apoyo externo).
 
 El backend hace, en este orden:
 
@@ -197,9 +200,13 @@ con `pnpm --filter @consta/backend test`.
 
 `POST /identity/connections` es el paso siguiente a la confirmación de un
 candidato. El cuerpo es
-{`"name": "...", "details": "...", "investigation": {...}, "candidateId": "c1", "connection": {...}, "branchContext": {"entityId": "...", "claimId": "...", "label": "..."}}`.
+{`"name": "...", "details": "...", "interest": "...", "investigation": {...}, "candidateId": "c1", "connection": {...}, "branchContext": {"entityId": "...", "claimId": "...", "label": "..."}}`.
 
-**`branchContext`** es un objeto opcional que permite profundizar en una rama específica de la investigación. Este contexto ayuda a enfocar las búsquedas en conexiones de segundo grado y a conectar hallazgos con el sujeto principal.
+**`branchContext`** es un objeto opcional que permite profundizar en una rama
+específica. Esa vuelta no sigue el tiempo automático del loop: todas las
+consultas parten de la identidad o afirmación elegida y buscan conexiones
+públicas de interés periodístico (partidos, fondeo, empresas asociadas, apoyo
+externo). Si aparece un vínculo directo con el sujeto, también se incluye.
 
 - **`entityId`**: Identificador de una entidad específica dentro de la investigación.
 - **`claimId`**: Identificador de una afirmación específica.
@@ -208,8 +215,23 @@ candidato. El cuerpo es
 El endpoint ahora valida que `branchContext` sea un objeto válido y que sus campos sean cadenas.
 
 Cada request ejecuta **una sola vuelta** para no agotar el timeout de 300 s. El
-frontend encadena hasta tres mientras `canContinue` sea `true`. La parada es
-anticipada cuando no hay afirmaciones nuevas.
+frontend encadena mientras `canContinue` sea `true`. En todas las vueltas se
+buscan conexiones de interés público (partidos, fondeo, empresas asociadas,
+apoyo externo). Si el periodista envió `interest`, ese foco manda; si no, ese
+es el default. Hay tres tiempos en el mismo loop, no una tercera fase de
+producto:
+
+1. **Vuelta 1** — solo primer grado: personas y organizaciones unidas
+   directamente al sujeto.
+2. **Vuelta 2** — un salto más desde esas identidades. Las cadenas que no
+   cierren contra el sujeto quedan como ramas abiertas (nombres concretos).
+3. **Vuelta 3** — solo si hay ramas abiertas: combina cada nombre de rama con
+   el del sujeto. Si la vuelta 2 no dejó nombres que cruzar, `canContinue` es
+   `false` y la tercera no se paga (`stoppedReason`: "sin ramas abiertas que
+   cruzar con el sujeto"). El periodista que elige una rama con
+   `branchContext` sí entra.
+
+La parada también es anticipada cuando no hay afirmaciones nuevas.
 
 En la primera llamada, sin `connection`, el backend:
 
