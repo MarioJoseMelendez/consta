@@ -338,9 +338,8 @@ export interface IdentityEntity {
   score: number | null;
   confidence: IdentityConfidence | null;
   /**
-   * Ficha completa que resolvió el motor de identidad para esta entidad.
-   * La IA elige el candidato; el periodista solo la consulta al abrir la
-   * tarjeta. Null si ninguna fuente sostuvo una ficha.
+   * Ficha completa opcional. El mapa ya no la pide: la tarjeta se llena con
+   * `type`, `description` y `sources` del minipaso de identificación.
    */
   profile?: IdentityCandidate | null;
 }

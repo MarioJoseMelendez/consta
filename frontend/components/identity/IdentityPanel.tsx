@@ -4,9 +4,11 @@ import { useEffect, useRef, useState } from "react";
 import {
   IDENTITY_MAX_EXTRA_SEARCHES,
   type IdentityCandidate,
+  type IdentityClaim,
   type IdentityField,
   type IdentityFieldKey,
   type IdentitySource,
+  type IdentitySummary,
 } from "@consta/contracts";
 
 import ClaimsWeb, { type BranchRequest } from "./ClaimsWeb";
@@ -35,10 +37,190 @@ const CONNECTION_PHASES = [
   "Buscando conexiones",
   "Identificando personas e instituciones",
   "Contrastando afirmaciones",
-  "Resolviendo la ficha de cada identidad",
+  "Armando el mapa de conexiones",
 ] as const;
 
 const CONNECTION_PHASE_INTERVAL_MS = 12_000;
+
+function qaSource(
+  title: string,
+  url: string,
+  source: IdentitySource = "tavily",
+) {
+  return { source, title, url, tier: "primary" as const };
+}
+
+/**
+ * Datos de prueba para `?qa=map`. No salen de una investigación real:
+ * sirven para revisar hilos, tabla y tarjetas sin esperar el loop.
+ */
+const QA_SUMMARY: IdentitySummary = {
+  who: "Nexo Servicios, S.A. es una empresa de demostración.",
+  findings: "Comparte representante legal y contratos públicos con otras identidades.",
+  text: "Nexo Servicios, S.A. se conecta con personas y empresas por representación legal y contratos.",
+  claims: 5,
+};
+
+const QA_CLAIMS: IdentityClaim[] = [
+  {
+    id: "root",
+    text: "El sujeto investigado es Nexo Servicios, S.A.",
+    parentId: null,
+    parentText: "",
+    sources: [
+      qaSource("RGAE proveedores", "https://example.test/rgae/nexo"),
+    ],
+    entities: [
+      {
+        id: "nexo",
+        label: "Nexo Servicios, S.A.",
+        type: "enterprise",
+        description: "Empresa de demostración inscrita como proveedor del Estado.",
+        sources: [qaSource("RGAE proveedores", "https://example.test/rgae/nexo")],
+        score: null,
+        confidence: null,
+      },
+    ],
+    score: 0,
+    confidence: "uncertain",
+    round: 0,
+  },
+  {
+    id: "claim-1",
+    text: "A. Méndez figura como representante legal de Nexo Servicios, S.A.",
+    parentId: "root",
+    parentText: "El sujeto investigado es Nexo Servicios, S.A.",
+    sources: [
+      qaSource("RGAE representantes", "https://example.test/rgae/rep-nexo"),
+    ],
+    entities: [
+      {
+        id: "mendez",
+        label: "A. Méndez",
+        type: "person",
+        description: "Persona citada como representante legal en el registro de proveedores.",
+        sources: [
+          qaSource("RGAE representantes", "https://example.test/rgae/rep-nexo"),
+        ],
+        score: 82,
+        confidence: "corroborated",
+      },
+    ],
+    score: 82,
+    confidence: "corroborated",
+    round: 1,
+  },
+  {
+    id: "claim-2",
+    text: "Una segunda inscripción vuelve a nombrar a A. Méndez como representante de Nexo Servicios, S.A.",
+    parentId: "root",
+    parentText: "El sujeto investigado es Nexo Servicios, S.A.",
+    sources: [
+      qaSource("RGAE representantes bis", "https://example.test/rgae/rep-nexo-2"),
+    ],
+    entities: [
+      {
+        id: "mendez-2",
+        label: "A. Méndez",
+        type: "person",
+        description: "Persona citada como representante legal en el registro de proveedores.",
+        sources: [
+          qaSource("RGAE representantes bis", "https://example.test/rgae/rep-nexo-2"),
+        ],
+        score: 70,
+        confidence: "probable",
+      },
+    ],
+    score: 70,
+    confidence: "probable",
+    round: 1,
+  },
+  {
+    id: "claim-3",
+    text: "Grupo Aurora, S.A. comparte representante legal con Nexo Servicios, S.A.",
+    parentId: "root",
+    parentText: "El sujeto investigado es Nexo Servicios, S.A.",
+    sources: [
+      qaSource("RGAE representantes Aurora", "https://example.test/rgae/aurora"),
+    ],
+    entities: [
+      {
+        id: "aurora",
+        label: "Grupo Aurora, S.A.",
+        type: "enterprise",
+        description: "Empresa que aparece con el mismo representante legal.",
+        sources: [
+          qaSource("RGAE representantes Aurora", "https://example.test/rgae/aurora"),
+        ],
+        score: 64,
+        confidence: "probable",
+      },
+    ],
+    score: 64,
+    confidence: "probable",
+    round: 1,
+  },
+  {
+    id: "claim-4",
+    text: "La Dirección de Obras Demo adjudicó un contrato a Nexo Servicios, S.A. por Q 12.4 millones.",
+    parentId: "root",
+    parentText: "El sujeto investigado es Nexo Servicios, S.A.",
+    sources: [
+      qaSource("Guatecompras OCDS", "https://example.test/ocds/nexo"),
+    ],
+    entities: [
+      {
+        id: "obras",
+        label: "Dirección de Obras Demo",
+        type: "enterprise",
+        description: "Entidad compradora de la adjudicación de demostración.",
+        sources: [qaSource("Guatecompras OCDS", "https://example.test/ocds/nexo")],
+        score: 90,
+        confidence: "corroborated",
+      },
+    ],
+    score: 90,
+    confidence: "corroborated",
+    round: 2,
+  },
+  {
+    id: "claim-5",
+    text: "Solar Ingeniería, S.A. también recibió una adjudicación de la Dirección de Obras Demo.",
+    parentId: "claim-4",
+    parentText:
+      "La Dirección de Obras Demo adjudicó un contrato a Nexo Servicios, S.A. por Q 12.4 millones.",
+    sources: [
+      qaSource("Guatecompras OCDS solar", "https://example.test/ocds/solar"),
+    ],
+    entities: [
+      {
+        id: "solar",
+        label: "Solar Ingeniería, S.A.",
+        type: "enterprise",
+        description: "Empresa adjudicada por la misma entidad compradora.",
+        sources: [
+          qaSource("Guatecompras OCDS solar", "https://example.test/ocds/solar"),
+        ],
+        score: 55,
+        confidence: "uncertain",
+      },
+      {
+        id: "obras-2",
+        label: "Dirección de Obras Demo",
+        type: "enterprise",
+        description: "Entidad compradora de la adjudicación de demostración.",
+        sources: [
+          qaSource("Guatecompras OCDS solar", "https://example.test/ocds/solar"),
+        ],
+        score: 55,
+        confidence: "uncertain",
+      },
+    ],
+    score: 48,
+    confidence: "uncertain",
+    round: 2,
+  },
+];
 
 function providerLabel(source: IdentitySource): string {
   return source === "tavily" ? "Tavily" : "Wikidata";
@@ -82,6 +264,7 @@ export default function IdentityPanel() {
   const panelRef = useRef<HTMLElement>(null);
   const profileRef = useRef<HTMLDivElement>(null);
   const [connectionStep, setConnectionStep] = useState(0);
+  const [qaMap, setQaMap] = useState(false);
   const roundCount = connection?.rounds.length ?? 0;
   const weaving = connectionPhase === "loading";
 
@@ -100,6 +283,11 @@ export default function IdentityPanel() {
       block: "start",
     });
   };
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setQaMap(params.get("qa") === "map");
+  }, []);
 
   useEffect(() => {
     if (phase === "idle") return;
@@ -123,6 +311,26 @@ export default function IdentityPanel() {
     }, CONNECTION_PHASE_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [weaving, roundCount]);
+
+  if (qaMap) {
+    return (
+      <section
+        ref={panelRef}
+        className="identity-panel"
+        aria-labelledby="identity-qa-title"
+      >
+        <div className="identity-head">
+          <p className="eyebrow">Vista de QA</p>
+          <h2 id="identity-qa-title">Mapa de conexiones con datos de prueba.</h2>
+        </div>
+        <p className="identity-status">
+          Cinco afirmaciones de demostración. Un hilo agrupa las que unen al
+          mismo par. El clic abre la tabla o la tarjeta.
+        </p>
+        <ClaimsWeb claims={QA_CLAIMS} summary={QA_SUMMARY} />
+      </section>
+    );
+  }
 
   if (phase === "idle") return null;
 
@@ -441,6 +649,7 @@ export default function IdentityPanel() {
               claims={connection.claims}
               summary={connection.summary}
               rounds={connection.rounds}
+              subject={confirmed}
               onInvestigate={handleInvestigateBranch}
               onFocusSubject={focusProfile}
               busy={weaving}

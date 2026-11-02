@@ -1144,6 +1144,14 @@ code {
   cursor: pointer;
 }
 
+.graph.is-edge-interactive .graph-edge {
+  cursor: pointer;
+}
+
+.graph.is-edge-interactive .edge-label {
+  pointer-events: auto;
+}
+
 .graph-edge {
   animation: graphFade 0.9s ease backwards;
   transition: opacity 0.25s ease;
@@ -1189,17 +1197,20 @@ code {
 }
 
 .graph-edge:hover .edge-line,
-.graph-edge.is-active .edge-line {
+.graph-edge.is-active .edge-line,
+.graph-edge.is-selected .edge-line {
   stroke-width: 2.1;
 }
 
 .graph-edge:hover.edge--confirmed .edge-line,
-.graph-edge.is-active.edge--confirmed .edge-line {
+.graph-edge.is-active.edge--confirmed .edge-line,
+.graph-edge.is-selected.edge--confirmed .edge-line {
   stroke: var(--lime);
 }
 
 .graph-edge:hover.edge--probable .edge-line,
-.graph-edge.is-active.edge--probable .edge-line {
+.graph-edge.is-active.edge--probable .edge-line,
+.graph-edge.is-selected.edge--probable .edge-line {
   stroke: var(--orange);
 }
 
@@ -1231,7 +1242,8 @@ code {
 }
 
 .graph-edge:hover .edge-label-text,
-.graph-edge.is-active .edge-label-text {
+.graph-edge.is-active .edge-label-text,
+.graph-edge.is-selected .edge-label-text {
   fill: var(--graph-label);
 }
 
@@ -6535,6 +6547,30 @@ body::before {
   display: grid;
   gap: 0.9rem;
   margin-top: 1.4rem;
+}
+
+.claims-map {
+  margin-top: 0.15rem;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(216, 255, 62, 0.04), transparent 55%),
+    var(--ink-soft);
+}
+
+.claims-map .graph {
+  padding: 0.35rem 0.55rem 0;
+}
+
+.claims-map .graph-legend {
+  margin-top: 0.2rem;
+  padding: 0.55rem 0.55rem 0.85rem;
+  border-top: 1px solid rgba(243, 239, 228, 0.08);
+}
+
+.claims-map .graph-svg {
+  max-width: 880px;
+  margin-inline: auto;
 }
 
 .claims-web-head {

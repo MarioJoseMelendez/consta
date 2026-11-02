@@ -75,9 +75,9 @@ export function identityCandidateSources(candidate: IdentityCandidate) {
 }
 
 /**
- * Los 15 campos del contrato, con su estado y sus fuentes. Es la misma ficha
- * que ya muestra el sujeto confirmado; las tarjetas de conexiones la reusan
- * sin pedirle al periodista que elija un candidato.
+ * Los 15 campos del contrato, con su estado y sus fuentes. Es la ficha del
+ * sujeto confirmado. Las tarjetas del mapa no la vuelven a pedir: se llenan
+ * con lo que el loop de conexiones ya encontró sobre cada identidad.
  */
 export default function IdentityProfileFields({
   candidate,

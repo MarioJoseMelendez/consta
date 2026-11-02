@@ -2320,170 +2320,6 @@ function readConnectionSources(items: readonly IdentitySearchItem[]): IdentitySo
   return sources;
 }
 
-/* --------------------------------------------------------------------------
-   Ficha de cada entidad: se reutiliza el motor de identidad
-   -------------------------------------------------------------------------- */
-
-const MAX_ENTITY_PROFILES = 12;
-const ENTITY_PROFILE_CONCURRENCY = 4;
-
-/** Cuánto sostiene una fuente los campos de un candidato. */
-function candidateStrength(candidate: IdentityCandidate): number {
-  let total = 0;
-  for (const field of candidate.fields) {
-    if (!field.value?.trim() || field.status === "not_found") continue;
-    total += field.score ?? 1;
-  }
-  return total;
-}
-
-/**
- * El nombre que devuelve la entidad y el del candidato rara vez son idénticos
- * ("Germán Ávila" y "Germán Ávila Plazas"). Se exige nombre completo o
- * contención; una etiqueta de una sola palabra solo vale exacta para no
- * atribuir una ficha de homónimo.
- */
-function candidateLabelMatch(candidateLabel: string, label: string): number {
-  const a = normalizeClaimText(candidateLabel);
-  const b = normalizeClaimText(label);
-  if (!a || !b) return 0;
-  if (a === b) return 3;
-  if (b.split(" ").length < 2 && a.split(" ").length < 2) return 0;
-  if (a.includes(b) || b.includes(a)) return 2;
-  if (mentionsEntity(candidateLabel, label) || mentionsEntity(label, candidateLabel)) {
-    return 1;
-  }
-  return 0;
-}
-
-/**
- * La IA propone los candidatos durante la investigación; aquí se elige el que
- * coincide con la entidad y tiene más campos sostenidos. No hay clic humano:
- * la ficha queda lista para cuando el periodista abra la tarjeta.
- */
-function pickEntityProfile(
-  candidates: readonly IdentityCandidate[],
-  label: string,
-): IdentityCandidate | null {
-  let best: IdentityCandidate | null = null;
-  let bestScore = 0;
-  for (const candidate of candidates) {
-    const match = candidateLabelMatch(candidate.label, label);
-    if (match === 0) continue;
-    const total = match * 1000 + candidateStrength(candidate);
-    if (total > bestScore) {
-      bestScore = total;
-      best = candidate;
-    }
-  }
-  return best;
-}
-
-function profileSources(candidate: IdentityCandidate): IdentitySourceRef[] {
-  const sources: IdentitySourceRef[] = [];
-  const seen = new Set<string>();
-  for (const field of candidate.fields) {
-    for (const source of field.sources) {
-      if (!source.url || seen.has(source.url)) continue;
-      seen.add(source.url);
-      sources.push(source);
-    }
-  }
-  return sources;
-}
-
-interface ProfiledEntities {
-  entities: IdentityEntity[];
-  /** Afirmaciones anteriores con las fichas nuevas ya pegadas. */
-  claims: IdentityClaim[];
-}
-
-/**
- * Para cada entidad nueva se corre el mismo motor de investigación de
- * identidad que usa el flujo manual. La diferencia es que aquí nadie elige:
- * el candidato con mejor coincidencia y más campos queda adjunto como
- * `profile`. Los perfiles ya resueltos se reutilizan entre vueltas y, si una
- * vuelta anterior dejó entidades sin ficha, esta vuelta las completa.
- */
-async function attachEntityProfiles(
-  env: GeneralEnv,
-  entities: IdentityEntity[],
-  prior: readonly IdentityClaim[],
-  subjectLabel?: string,
-): Promise<ProfiledEntities> {
-  const subjectKey = subjectLabel ? normalizeClaimText(subjectLabel) : "";
-  const cached = new Map<string, IdentityCandidate>();
-  for (const claim of prior) {
-    for (const entity of claim.entities) {
-      if (!entity.profile) continue;
-      const key = normalizeClaimText(entity.label);
-      if (key && !cached.has(key)) cached.set(key, entity.profile);
-    }
-  }
-
-  // El sujeto ya tiene su ficha confirmada en el panel; no se vuelve a
-  // investigar aquí ni se paga otra ronda de búsquedas por él. Las entidades
-  // de esta vuelta van primero y las pendientes de vueltas anteriores después.
-  const pending = new Map<string, string>();
-  const addPending = (entity: IdentityEntity) => {
-    const key = normalizeClaimText(entity.label);
-    if (!key || key === subjectKey || cached.has(key) || pending.has(key)) return;
-    pending.set(key, entity.label);
-  };
-  for (const entity of entities) addPending(entity);
-  for (const claim of prior) {
-    for (const entity of claim.entities) addPending(entity);
-  }
-
-  const queue = [...pending.entries()]
-    .slice(0, MAX_ENTITY_PROFILES)
-    .map(([key, label]) => ({ key, label }));
-  const resolved = new Map<string, IdentityCandidate>();
-  const workers = Array.from(
-    { length: Math.min(ENTITY_PROFILE_CONCURRENCY, queue.length) },
-    async () => {
-      for (let item = queue.shift(); item; item = queue.shift()) {
-        const investigation = await investigateIdentity(env, item.label);
-        const profile = pickEntityProfile(investigation.candidates ?? [], item.label);
-        if (profile) resolved.set(item.key, profile);
-      }
-    },
-  );
-  await Promise.all(workers);
-
-  const attach = (entity: IdentityEntity): IdentityEntity => {
-    const key = normalizeClaimText(entity.label);
-    const profile = (key ? resolved.get(key) : null) ?? cached.get(key) ?? null;
-    if (!profile) return entity;
-    const sources = profileSources(profile);
-    return {
-      ...entity,
-      profile,
-      description: entity.description || profile.description,
-      sources: uniqueConnectionSources([...entity.sources, ...sources]),
-    };
-  };
-
-  return {
-    entities: entities.map(attach),
-    claims: prior.map((claim) => ({
-      ...claim,
-      entities: claim.entities.map(attach),
-    })),
-  };
-}
-
-function uniqueConnectionSources(sources: IdentitySourceRef[]): IdentitySourceRef[] {
-  const out: IdentitySourceRef[] = [];
-  const seen = new Set<string>();
-  for (const source of sources) {
-    if (!source.url || seen.has(source.url)) continue;
-    seen.add(source.url);
-    out.push(source);
-  }
-  return out.slice(0, 8);
-}
-
 function readConnectionClaimSources(claim: RawConnectionClaim, items: readonly IdentitySearchItem[]): IdentitySourceRef[] {
   const sources: IdentitySourceRef[] = [];
   const seen = new Set<string>();
@@ -3092,18 +2928,12 @@ async function runConnectionRound(
     };
   }
 
-  // Reutiliza el motor de identidad para que cada tarjeta tenga la ficha
-  // completa; la IA elige el candidato, no el periodista. El sujeto queda
-  // fuera porque su ficha ya está confirmada en el panel. Las fichas
-  // pendientes de vueltas anteriores se completan aquí.
-  const profiled = await attachEntityProfiles(
-    env,
-    resolvedEntities,
-    state.claims,
-    input.subject.label,
-  );
-  const entities = profiled.entities;
-  const priorClaims = profiled.claims;
+  // La tarjeta de cada identidad se llena con lo que este minipaso ya
+  // extrajo (tipo, descripción, fuentes). No se vuelve a correr
+  // investigateIdentity: esa búsqueda es del sujeto confirmado, no de
+  // cada nudo del mapa.
+  const entities = resolvedEntities;
+  const priorClaims = state.claims;
 
   const claimCall = await callOpenRouter(
     env,

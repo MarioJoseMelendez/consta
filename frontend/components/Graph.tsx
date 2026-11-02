@@ -14,11 +14,21 @@ interface GraphProps {
   nodes: GraphNode[];
   edges: GraphEdge[];
   selectedId?: string;
+  /** Nodo que queda al centro. Si no se pasa, se usa `selectedId`. */
+  centerId?: string;
+  selectedEdgeId?: string;
   onSelect?: (id: string) => void;
+  /** Abre el hilo: una arista agrupa todas las afirmaciones entre dos nodos. */
+  onSelectEdge?: (id: string) => void;
   compact?: boolean;
   theme?: "ink" | "paper";
   hint?: string;
   className?: string;
+  statusLegend?: {
+    confirmed: string;
+    probable: string;
+    unresolved: string;
+  };
 }
 
 interface NodeLayout extends GraphNode {
@@ -88,7 +98,7 @@ function wrapLabel(label: string, maxChars: number, maxLines = 2): string[] {
 function buildLayout(
   nodes: GraphNode[],
   edges: GraphEdge[],
-  selectedId: string | undefined,
+  centerId: string | undefined,
   compact: boolean,
   narrow: boolean,
 ): {
@@ -108,7 +118,7 @@ function buildLayout(
   const radiusX = narrow ? 130 : compact ? 180 : 290;
   const radiusY = narrow ? 138 : compact ? 100 : 148;
 
-  const centerNode = nodes.find((node) => node.id === selectedId) ?? nodes[0];
+  const centerNode = nodes.find((node) => node.id === centerId) ?? nodes[0];
   if (!centerNode) {
     return { nodes: [], edges: [], width, height, small };
   }
@@ -189,19 +199,30 @@ function nodeShapePath(kind: EntityKind, r: number): string {
   }
 }
 
+const DEFAULT_STATUS_LEGEND = {
+  confirmed: "Confirmado",
+  probable: "Probable",
+  unresolved: "Sin resolver",
+} as const;
+
 export default function Graph({
   nodes,
   edges,
   selectedId,
+  centerId,
+  selectedEdgeId,
   onSelect,
+  onSelectEdge,
   compact = false,
   theme = "ink",
   hint,
   className,
+  statusLegend = DEFAULT_STATUS_LEGEND,
 }: GraphProps) {
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
   const [narrow, setNarrow] = useState(false);
+  const layoutCenterId = centerId ?? selectedId;
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 760px)");
@@ -214,8 +235,8 @@ export default function Graph({
   }, []);
 
   const layout = useMemo(
-    () => buildLayout(nodes, edges, selectedId, compact, narrow),
-    [nodes, edges, selectedId, compact, narrow],
+    () => buildLayout(nodes, edges, layoutCenterId, compact, narrow),
+    [nodes, edges, layoutCenterId, compact, narrow],
   );
 
   const adjacency = useMemo(() => {
@@ -239,13 +260,14 @@ export default function Graph({
       return new Set([hoveredNodeId, ...(adjacency.get(hoveredNodeId) ?? [])]);
     }
 
-    if (hoveredEdgeId) {
-      const edge = edges.find((item) => item.id === hoveredEdgeId);
+    const edgeId = hoveredEdgeId ?? selectedEdgeId;
+    if (edgeId) {
+      const edge = edges.find((item) => item.id === edgeId);
       if (edge) return new Set([edge.from, edge.to]);
     }
 
     return null;
-  }, [hoveredNodeId, hoveredEdgeId, adjacency, edges]);
+  }, [hoveredNodeId, hoveredEdgeId, selectedEdgeId, adjacency, edges]);
 
   const activeEdgeIds = useMemo(() => {
     if (hoveredNodeId) {
@@ -260,8 +282,9 @@ export default function Graph({
     }
 
     if (hoveredEdgeId) return new Set([hoveredEdgeId]);
+    if (selectedEdgeId) return new Set([selectedEdgeId]);
     return null;
-  }, [hoveredNodeId, hoveredEdgeId, edges]);
+  }, [hoveredNodeId, hoveredEdgeId, selectedEdgeId, edges]);
 
   function handleNodeKeyDown(
     event: KeyboardEvent<SVGGElement>,
@@ -271,6 +294,17 @@ export default function Graph({
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       onSelect(nodeId);
+    }
+  }
+
+  function handleEdgeKeyDown(
+    event: KeyboardEvent<SVGGElement>,
+    edgeId: string,
+  ) {
+    if (!onSelectEdge) return;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onSelectEdge(edgeId);
     }
   }
 
@@ -292,8 +326,8 @@ export default function Graph({
       className={`graph graph--${theme}${compact ? " graph--compact" : ""}${
         narrow ? " graph--narrow" : ""
       }${onSelect ? " is-interactive" : " is-static"}${
-        className ? ` ${className}` : ""
-      }`}
+        onSelectEdge ? " is-edge-interactive" : ""
+      }${className ? ` ${className}` : ""}`}
     >
       <svg
         viewBox={`0 0 ${layout.width} ${layout.height}`}
@@ -305,6 +339,7 @@ export default function Graph({
 
         {layout.edges.map((edge) => {
           const active = activeEdgeIds?.has(edge.id) ?? false;
+          const selected = edge.id === selectedEdgeId;
           const dim = activeEdgeIds !== null && !active;
 
           return (
@@ -312,9 +347,32 @@ export default function Graph({
               key={edge.id}
               className={`graph-edge edge--${edge.status}${
                 active ? " is-active" : ""
-              }${dim ? " is-dim" : ""}`}
+              }${selected ? " is-selected" : ""}${dim ? " is-dim" : ""}`}
+              role={onSelectEdge ? "button" : undefined}
+              tabIndex={onSelectEdge ? 0 : undefined}
+              aria-pressed={onSelectEdge ? selected : undefined}
+              aria-label={
+                onSelectEdge
+                  ? `${edge.label}. Abrir las afirmaciones de este hilo.`
+                  : undefined
+              }
+              onClick={
+                onSelectEdge
+                  ? (event) => {
+                      event.stopPropagation();
+                      onSelectEdge(edge.id);
+                    }
+                  : undefined
+              }
+              onKeyDown={
+                onSelectEdge
+                  ? (event) => handleEdgeKeyDown(event, edge.id)
+                  : undefined
+              }
               onMouseEnter={() => setHoveredEdgeId(edge.id)}
               onMouseLeave={() => setHoveredEdgeId(null)}
+              onFocus={() => setHoveredEdgeId(edge.id)}
+              onBlur={() => setHoveredEdgeId(null)}
             >
               <title>{`${edge.label} · ${edge.status}`}</title>
               <line
@@ -436,18 +494,18 @@ export default function Graph({
       <figcaption className="graph-legend">
         <span className="legend-item">
           <i className="legend-line legend-line--confirmed" aria-hidden="true" />
-          Confirmado
+          {statusLegend.confirmed}
         </span>
         <span className="legend-item">
           <i className="legend-line legend-line--probable" aria-hidden="true" />
-          Probable
+          {statusLegend.probable}
         </span>
         <span className="legend-item">
           <i
             className="legend-line legend-line--unresolved"
             aria-hidden="true"
           />
-          Sin resolver
+          {statusLegend.unresolved}
         </span>
         <span className="legend-kinds">
           Cuadrado empresa · círculo persona · rombo entidad

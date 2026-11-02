@@ -264,26 +264,19 @@ Cada vuelta hace, en este orden:
    afirmaciones ya acumuladas para armar el hilo; `entidades` se cruza con las
    identificadas en el minipaso anterior y se descarta al sujeto.
 
-5. **Ficha completa de cada entidad.** Para cada entidad nueva se ejecuta
-   `investigateIdentity`, el mismo motor del flujo manual, con sus búsquedas,
-   rondas y scoring. La IA propone los candidatos y el backend conserva el que
-   coincide con el nombre y sostiene más campos (`pickEntityProfile`), sin que
-   el periodista elija. La ficha queda en `entities[].profile` y completa
-   `description` y `sources` de la entidad. Los perfiles ya resueltos se
-   reutilizan entre vueltas, y cada vuelta completa hasta 12 fichas pendientes
-   con concurrencia 4. El sujeto queda fuera: su ficha ya está confirmada en el
-   panel. Las fichas pendientes de vueltas anteriores se reintentan en la
-   siguiente vuelta.
+5. **Tarjeta de cada identidad.** No se vuelve a correr `investigateIdentity`.
+   La tarjeta se llena con tipo, descripción y fuentes que ya trajo el
+   minipaso de identificación. El sujeto queda fuera: su ficha ya está
+   confirmada en el panel.
 
 La respuesta es `{ claims, rounds, summary, canContinue, stoppedReason }`.
 `claims` acumula la raíz y las afirmaciones nuevas con sus fuentes, entidades,
 puntaje y confianza. `rounds[]` guarda las consultas, búsquedas, entidades y
 afirmaciones de cada vuelta. `summary` mantiene el contexto del sujeto y el
-conteo de afirmaciones. La investigación completa por entidad multiplica las
-llamadas al modelo y las búsquedas: es el costo de que cada tarjeta llegue con
-su ficha resuelta. Las etiquetas de relación («hermano», «ministro») no viajan
-en el grafo; el frontend las deriva del texto solo para la tabla de
-afirmaciones.
+conteo de afirmaciones. El frontend agrupa en un solo hilo todas las
+afirmaciones que unen al mismo par; el clic abre la tabla con texto, fuentes y
+confianza (incierto, probable, corroborado). Las etiquetas de relación
+(«hermano», «ministro») se derivan del texto para el hilo y para esa tabla.
 
 ## CORS
 

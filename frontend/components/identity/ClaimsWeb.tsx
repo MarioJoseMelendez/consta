@@ -1,18 +1,24 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   identityConfidenceLabel,
   identitySourceTierLabel,
   identityTypeLabel,
+  type EntityKind,
+  type GraphEdge as MapEdge,
+  type GraphNode as MapNode,
   type IdentityCandidate,
   type IdentityClaim,
   type IdentityConnectionRound,
   type IdentityEntity,
   type IdentitySourceRef,
+  type IdentityStatus,
   type IdentitySummary,
+  type RelationshipType,
 } from "@consta/contracts";
 
+import NetworkMap from "../Graph";
 import IdentityProfileFields from "./IdentityProfile";
 
 export interface BranchRequest {
@@ -25,6 +31,8 @@ interface ClaimsWebProps {
   claims: IdentityClaim[];
   summary: IdentitySummary;
   rounds?: IdentityConnectionRound[];
+  /** Ficha ya confirmada del sujeto. No se vuelve a investigar aquí. */
+  subject?: IdentityCandidate | null;
   onInvestigate?: (branch: BranchRequest) => void;
   /** Lleva al perfil completo del sujeto confirmado, ya renderizado arriba. */
   onFocusSubject?: () => void;
@@ -32,11 +40,9 @@ interface ClaimsWebProps {
   busy?: boolean;
 }
 
-const MAX_THREAD_DEPTH = 3;
-
 /**
- * Relaciones que la evidencia suele nombrar en texto. Solo se usan en la
- * tabla de afirmaciones; las tarjetas y los hilos no llevan etiquetas.
+ * Relaciones que la evidencia suele nombrar en texto. El hilo muestra la
+ * relación más clara del par; la tabla lista cada afirmación.
  */
 const RELATION_RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bmedio herman[oa]s?\b/, "medio hermano/a"],
@@ -56,7 +62,7 @@ const RELATION_RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bniet[oa]s?\b/, "nieto/a"],
   [/\bsuegr[oa]s?\b/, "suegro/a"],
   [/\bcunad[oa]s?\b/, "cuñado/a"],
-  [/\brepresentantes? legales?\b/, "representante legal"],
+  [/\brepresentantes? legal(?:es)?\b/, "representante legal"],
   [/\bviceministr[oa]s?\b/, "viceministro/a"],
   [/\bministr[oa]s?\b/, "ministro/a"],
   [/\bsoci[oa]s?\b/, "socio/a"],
@@ -72,6 +78,8 @@ const RELATION_RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bdiputad[oa]s?\b/, "diputado/a"],
   [/\bconcejal(?:a|es|as)?\b/, "concejal"],
   [/\bcontratistas?\b/, "contratista"],
+  [/\badjudic\w*\b/, "adjudicación"],
+  [/\bcontratos?\b/, "contrato"],
   [/\bproveedor(?:a|es|as)?\b/, "proveedor"],
   [/\bemplead[oa]s?\b/, "empleado/a"],
   [/\basesor(?:a|es|as)?\b/, "asesor/a"],
@@ -224,13 +232,8 @@ function relationFor(text: string, label?: string): string {
 }
 
 /* --------------------------------------------------------------------------
-   Hilos: la afirmación es el hilo, las entidades son los nudos
+   Índice de afirmaciones para reconstruir el origen de cada hilo
    -------------------------------------------------------------------------- */
-
-interface Thread {
-  claim: IdentityClaim;
-  depth: number;
-}
 
 interface ClaimIndex {
   byId: Map<string, IdentityClaim>;
@@ -259,45 +262,8 @@ function parentOf(claim: IdentityClaim, index: ClaimIndex): IdentityClaim | null
   return found && found.id !== claim.id ? found : null;
 }
 
-function buildThreads(claims: readonly IdentityClaim[]): Thread[] {
-  const index = claimIndex(claims);
-  const children = new Map<string, IdentityClaim[]>();
-  const roots: IdentityClaim[] = [];
-  for (const claim of claims) {
-    const parent = parentOf(claim, index);
-    if (!parent) {
-      roots.push(claim);
-      continue;
-    }
-    const list = children.get(parent.id) ?? [];
-    list.push(claim);
-    children.set(parent.id, list);
-  }
-
-  const order = (left: IdentityClaim, right: IdentityClaim) =>
-    left.round - right.round || left.id.localeCompare(right.id);
-  roots.sort(order);
-
-  const out: Thread[] = [];
-  const seen = new Set<string>();
-  const walk = (claim: IdentityClaim, depth: number) => {
-    if (seen.has(claim.id)) return;
-    seen.add(claim.id);
-    out.push({ claim, depth });
-    for (const child of [...(children.get(claim.id) ?? [])].sort(order)) {
-      walk(child, depth + 1);
-    }
-  };
-
-  for (const root of roots) walk(root, 0);
-  for (const claim of [...claims].sort(order)) {
-    if (!seen.has(claim.id)) walk(claim, 0);
-  }
-  return out;
-}
-
 /* --------------------------------------------------------------------------
-   Red: cada identidad es una tarjeta y sus vínculos alimentan la tabla
+   Red: cada identidad es un nudo; un hilo agrupa las afirmaciones del par
    -------------------------------------------------------------------------- */
 
 interface GraphNode {
@@ -309,7 +275,7 @@ interface GraphNode {
   sources: IdentitySourceRef[];
   /** Afirmaciones que mencionan esta identidad. */
   claims: IdentityClaim[];
-  /** Ficha completa resuelta por el motor de identidad. */
+  /** Ficha opcional si ya venía de una vuelta anterior. */
   profile: IdentityCandidate | null;
   isSubject: boolean;
 }
@@ -332,18 +298,30 @@ interface Graph {
   edges: GraphEdge[];
 }
 
-function subjectOf(claims: readonly IdentityClaim[]): GraphNode {
+function candidateType(candidate: IdentityCandidate | null | undefined): IdentityEntity["type"] {
+  const value = candidate?.fields.find((field) => field.key === "type")?.value;
+  if (value === "person" || value === "enterprise" || value === "unknown") {
+    return value;
+  }
+  return "unknown";
+}
+
+function subjectOf(
+  claims: readonly IdentityClaim[],
+  candidate?: IdentityCandidate | null,
+): GraphNode {
   const root = claims.find((claim) => claim.id === "root");
   const entity = root?.entities[0];
+  const type = candidateType(candidate);
   return {
     id: entity ? entityKey(entity) : "subject",
-    label: entity?.label || "Sujeto",
-    type: entity?.type ?? "unknown",
-    description: entity?.description ?? "",
+    label: entity?.label || candidate?.label || "Sujeto",
+    type: type !== "unknown" ? type : (entity?.type ?? "unknown"),
+    description: entity?.description || candidate?.description || "",
     round: 0,
     sources: uniqueSources(entity?.sources ?? []),
     claims: [],
-    profile: null,
+    profile: candidate ?? null,
     isSubject: true,
   };
 }
@@ -360,8 +338,11 @@ function findNodeByLabel(
   );
 }
 
-function buildGraph(claims: readonly IdentityClaim[]): Graph {
-  const subject = subjectOf(claims);
+function buildGraph(
+  claims: readonly IdentityClaim[],
+  candidate?: IdentityCandidate | null,
+): Graph {
+  const subject = subjectOf(claims, candidate);
   const nodes: GraphNode[] = [subject];
   const sorted = [...claims].sort(
     (left, right) => left.round - right.round || left.id.localeCompare(right.id),
@@ -439,7 +420,83 @@ function buildGraph(claims: readonly IdentityClaim[]): Graph {
     edges.push(edge);
   }
 
+  // Si una identidad aparece en afirmaciones que nombran al sujeto y aún no
+  // tiene hilo, se cuelga del sujeto. Evita el mapa de recuadros sueltos.
+  for (const node of nodes) {
+    if (node.isSubject) continue;
+    const key = [subject.id, node.id].sort().join("|");
+    if (byPair.has(key)) continue;
+    const shared = node.claims.filter(
+      (claim) => !subject.label || mentionsLabel(claim.text, subject.label),
+    );
+    if (shared.length === 0) continue;
+    const relation =
+      shared
+        .map((claim) => relationFor(claim.text, node.label))
+        .find((value) => value) ?? "";
+    const edge: GraphEdge = {
+      id: `edge-${edges.length}`,
+      from: subject.id,
+      to: node.id,
+      fromLabel: subject.label,
+      toLabel: node.label,
+      relation,
+      kind: "subject",
+      claims: shared,
+    };
+    byPair.set(key, edge);
+    edges.push(edge);
+  }
+
   return { nodes, edges };
+}
+
+function entityKindOf(type: IdentityEntity["type"]): EntityKind {
+  if (type === "enterprise") return "company";
+  if (type === "person") return "person";
+  return "unknown";
+}
+
+function edgeStatusOf(claims: IdentityClaim[]): IdentityStatus {
+  if (claims.some((claim) => claim.confidence === "corroborated")) return "confirmed";
+  if (claims.some((claim) => claim.confidence === "probable")) return "probable";
+  return "unresolved";
+}
+
+function relationshipTypeOf(relation: string): RelationshipType {
+  const value = relation.toLocaleLowerCase("es");
+  if (value.includes("representante") && value.includes("compart")) {
+    return "SHARED_LEGAL_REP";
+  }
+  if (value.includes("representante")) return "LEGAL_REP_OF";
+  if (value.includes("adjudic")) return "AWARDED_CONTRACT";
+  if (value.includes("contrat") || value.includes("proveedor")) return "CONTRACT_WITH";
+  return "OFFICER_OF";
+}
+
+function edgeLabelOf(edge: GraphEdge): string {
+  if (edge.relation) return edge.relation;
+  if (edge.claims.length > 1) return `${edge.claims.length} afirmaciones`;
+  return "conexión";
+}
+
+function toMapGraph(graph: Graph): { nodes: MapNode[]; edges: MapEdge[] } {
+  return {
+    nodes: graph.nodes.map((node) => ({
+      id: node.id,
+      label: node.label,
+      kind: entityKindOf(node.type),
+      status: node.isSubject ? "confirmed" : edgeStatusOf(node.claims),
+    })),
+    edges: graph.edges.map((edge) => ({
+      id: edge.id,
+      from: edge.from,
+      to: edge.to,
+      label: edgeLabelOf(edge),
+      type: relationshipTypeOf(edge.relation),
+      status: edgeStatusOf(edge.claims),
+    })),
+  };
 }
 
 /* --------------------------------------------------------------------------
@@ -631,7 +688,7 @@ function AffirmationTable({
 }
 
 /* --------------------------------------------------------------------------
-   Tarjetas de identidad: la foto abre la ficha, sin etiquetas de relación
+   Tarjeta de una identidad del mapa: lo que el loop ya encontró
    -------------------------------------------------------------------------- */
 
 function initialsOf(label: string): string {
@@ -641,210 +698,6 @@ function initialsOf(label: string): string {
     .filter((word) => word.length > 1);
   const picked = words.slice(0, 2).map((word) => word[0]?.toUpperCase() ?? "");
   return picked.join("") || label.slice(0, 1).toUpperCase();
-}
-
-function IdentityCard({
-  node,
-  selected,
-  onSelect,
-}: {
-  node: GraphNode;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      className="claim-card"
-      data-subject={node.isSubject}
-      data-open={selected}
-      onClick={onSelect}
-      aria-label={
-        node.isSubject
-          ? `Ver el perfil completo de ${node.label}`
-          : `Abrir la ficha de ${node.label}`
-      }
-      aria-pressed={selected}
-    >
-      <span className="claim-card-photo" aria-hidden="true">
-        <span className="claim-card-initials">{initialsOf(node.label)}</span>
-      </span>
-      <span className="claim-card-type">
-        {node.isSubject ? "Sujeto investigado" : identityTypeLabel(node.type)}
-      </span>
-      <span className="claim-card-name">{node.label}</span>
-      <span className="claim-card-description">
-        {node.description || "La fuente no dejó una descripción."}
-      </span>
-      <span className="claim-card-meta">
-        {node.isSubject
-          ? "Perfil completo del sujeto"
-          : `${node.claims.length} ${
-              node.claims.length === 1 ? "afirmación" : "afirmaciones"
-            } · ${node.sources.length} ${
-              node.sources.length === 1 ? "fuente" : "fuentes"
-            }`}
-        {node.profile ? " · ficha completa" : ""}
-      </span>
-    </button>
-  );
-}
-
-function IdentityGallery({
-  graph,
-  selectedNodeId,
-  onSelectNode,
-  onSelectSubject,
-}: {
-  graph: Graph;
-  selectedNodeId: string | null;
-  onSelectNode: (nodeId: string) => void;
-  onSelectSubject: () => void;
-}) {
-  return (
-    <div className="claims-gallery" role="list" aria-label="Identidades conectadas">
-      {graph.nodes.map((node) => (
-        <div className="claims-gallery-item" role="listitem" key={node.id}>
-          <IdentityCard
-            node={node}
-            selected={node.isSubject ? false : node.id === selectedNodeId}
-            onSelect={() => {
-              if (node.isSubject) onSelectSubject();
-              else onSelectNode(node.id);
-            }}
-          />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/* --------------------------------------------------------------------------
-   Conexiones: cada arista es la afirmación que une dos identidades
-   -------------------------------------------------------------------------- */
-
-function ConnectionBoard({
-  graph,
-  selectedEdgeId,
-  onSelectEdge,
-}: {
-  graph: Graph;
-  selectedEdgeId: string | null;
-  onSelectEdge: (edgeId: string) => void;
-}) {
-  if (graph.edges.length === 0) {
-    return (
-      <section className="claim-connections">
-        <p className="mono-label">Conexiones</p>
-        <p className="claims-empty">
-          La evidencia todavía no une dos identidades entre sí.
-        </p>
-      </section>
-    );
-  }
-
-  return (
-    <section className="claim-connections" aria-label="Conexiones entre identidades">
-      <p className="mono-label">Conexiones</p>
-      <div className="claim-connections-grid">
-        {graph.edges.map((edge) => {
-          const sources = uniqueSources(
-            edge.claims.flatMap((claim) => claim.sources),
-          ).length;
-          return (
-            <button
-              key={edge.id}
-              type="button"
-              className="claim-connection"
-              data-open={edge.id === selectedEdgeId}
-              aria-pressed={edge.id === selectedEdgeId}
-              aria-label={`Abrir las afirmaciones entre ${edge.fromLabel} y ${edge.toLabel}`}
-              onClick={() => onSelectEdge(edge.id)}
-            >
-              <span className="claim-connection-side">
-                <span className="claim-connection-photo" aria-hidden="true">
-                  <span className="claim-card-initials">
-                    {initialsOf(edge.fromLabel)}
-                  </span>
-                </span>
-                <span className="claim-connection-name">{edge.fromLabel}</span>
-              </span>
-              <span className="claim-connection-thread" aria-hidden="true" />
-              <span className="claim-connection-side" data-side="to">
-                <span className="claim-connection-photo" aria-hidden="true">
-                  <span className="claim-card-initials">
-                    {initialsOf(edge.toLabel)}
-                  </span>
-                </span>
-                <span className="claim-connection-name">{edge.toLabel}</span>
-              </span>
-              <span className="claim-connection-meta">
-                {edge.claims.length}{" "}
-                {edge.claims.length === 1 ? "afirmación" : "afirmaciones"} ·{" "}
-                {sources} {sources === 1 ? "fuente" : "fuentes"}
-                {edge.kind === "subject" ? " · con el sujeto" : ""}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
-/* --------------------------------------------------------------------------
-   Pruebas y ficha de una identidad
-   -------------------------------------------------------------------------- */
-
-function ClaimEvidence({
-  claim,
-  subjectLabel,
-  onOpenEntity,
-  onInvestigate,
-  busy,
-}: {
-  claim: IdentityClaim;
-  subjectLabel: string;
-  onOpenEntity?: (entity: IdentityEntity) => void;
-  onInvestigate?: (branch: BranchRequest) => void;
-  busy?: boolean;
-}) {
-  const root = claim.id === "root";
-
-  return (
-    <div className="claim-evidence">
-      <div className="claim-thread-head">
-        <span className="claim-thread-badge" data-confidence={claim.confidence}>
-          {identityConfidenceLabel(claim.confidence)}
-        </span>
-        <span className="claim-thread-meta">{root ? "Sujeto" : `Vuelta ${claim.round}`}</span>
-        {typeof claim.score === "number" && claim.score > 1 ? (
-          <span className="claim-thread-meta">Puntaje {claim.score}</span>
-        ) : null}
-        <span className="claim-thread-meta">
-          {uniqueSources(claim.sources).length}{" "}
-          {uniqueSources(claim.sources).length === 1 ? "fuente" : "fuentes"}
-        </span>
-      </div>
-
-      <AffirmationTable
-        claims={[claim]}
-        subjectLabel={subjectLabel}
-        onOpenEntity={onOpenEntity}
-      />
-
-      {!root && onInvestigate ? (
-        <button
-          type="button"
-          className="claim-thread-action"
-          disabled={busy}
-          onClick={() => onInvestigate({ claimId: claim.id, label: claim.text })}
-        >
-          Profundizar en esta afirmación
-        </button>
-      ) : null}
-    </div>
-  );
 }
 
 function IdentityDetail({
@@ -880,18 +733,18 @@ function IdentityDetail({
 
       {node.description ? (
         <p className="claim-node-description">{node.description}</p>
-      ) : null}
+      ) : (
+        <p className="claim-node-open">
+          La investigación aún no dejó una descripción de esta identidad.
+        </p>
+      )}
 
       {node.profile ? (
         <div className="claim-node-profile">
           <p className="mono-label">Ficha de identidad</p>
           <IdentityProfileFields candidate={node.profile} />
         </div>
-      ) : (
-        <p className="claim-node-open">
-          La ficha completa de esta identidad no quedó sostenida por una fuente.
-        </p>
-      )}
+      ) : null}
 
       {sources.length > 0 ? (
         <div className="claim-node-sources">
@@ -938,6 +791,7 @@ export default function ClaimsWeb({
   claims,
   summary,
   rounds,
+  subject: confirmed,
   onInvestigate,
   onFocusSubject,
   busy,
@@ -946,12 +800,9 @@ export default function ClaimsWeb({
   const detailRef = useRef<HTMLElement>(null);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
-  const [openThreads, setOpenThreads] = useState<ReadonlySet<string>>(
-    () => new Set(["root"]),
-  );
 
-  const threads = buildThreads(claims);
-  const graph = buildGraph(claims);
+  const graph = useMemo(() => buildGraph(claims, confirmed), [claims, confirmed]);
+  const map = useMemo(() => toMapGraph(graph), [graph]);
   const subject = graph.nodes.find((node) => node.isSubject) ?? null;
   const subjectLabel = subject?.label ?? "";
   const activeNode =
@@ -990,7 +841,7 @@ export default function ClaimsWeb({
     onFocusSubject?.();
   };
 
-  // La ficha se abre debajo de la galería: sin este ajuste queda fuera de la
+  // La ficha se abre debajo del mapa: sin este ajuste queda fuera de la
   // vista y parece que el clic no hizo nada.
   useEffect(() => {
     if ((!selectedNode && !selectedEdge) || !detailRef.current) return;
@@ -1000,15 +851,6 @@ export default function ClaimsWeb({
       behavior: reduce ? "auto" : "smooth",
     });
   }, [selectedNode, selectedEdge]);
-
-  const toggleThread = (claimId: string) => {
-    setOpenThreads((current) => {
-      const next = new Set(current);
-      if (next.has(claimId)) next.delete(claimId);
-      else next.add(claimId);
-      return next;
-    });
-  };
 
   const detailOpen = Boolean(activeNode || activeEdge);
 
@@ -1021,6 +863,9 @@ export default function ClaimsWeb({
         {summary.text ? <p className="claims-web-lead">{summary.text}</p> : null}
         <p className="claims-web-meta">
           {claimCount} {claimCount === 1 ? "afirmación" : "afirmaciones"}
+          {graph.edges.length > 0
+            ? ` · ${graph.edges.length} ${graph.edges.length === 1 ? "hilo" : "hilos"}`
+            : ""}
           {roundCount > 0
             ? ` · ${roundCount} ${roundCount === 1 ? "vuelta" : "vueltas"}`
             : ""}
@@ -1028,19 +873,37 @@ export default function ClaimsWeb({
       </header>
 
       {graph.nodes.length > 0 ? (
-        <IdentityGallery
-          graph={graph}
-          selectedNodeId={activeNode?.id ?? null}
-          onSelectNode={openNode}
-          onSelectSubject={openSubject}
-        />
-      ) : null}
-
-      <ConnectionBoard
-        graph={graph}
-        selectedEdgeId={activeEdge?.id ?? null}
-        onSelectEdge={openEdge}
-      />
+        <div className="claims-map">
+          <NetworkMap
+            nodes={map.nodes}
+            edges={map.edges}
+            selectedId={activeNode?.id ?? (activeEdge ? undefined : subject?.id)}
+            centerId={subject?.id}
+            selectedEdgeId={activeEdge?.id}
+            onSelect={(id) => {
+              const node = graph.nodes.find((item) => item.id === id);
+              if (!node || node.isSubject) {
+                openSubject();
+                return;
+              }
+              openNode(id);
+            }}
+            onSelectEdge={openEdge}
+            compact
+            theme="ink"
+            hint="Haz clic en un hilo para ver las afirmaciones. Haz clic en un sujeto para abrir su tarjeta."
+            statusLegend={{
+              confirmed: "Corroborado",
+              probable: "Probable",
+              unresolved: "Incierto",
+            }}
+          />
+        </div>
+      ) : (
+        <p className="claims-empty">
+          Todavía no hay identidades suficientes para dibujar el mapa.
+        </p>
+      )}
 
       {detailOpen ? (
         <section
@@ -1115,73 +978,11 @@ export default function ClaimsWeb({
         </section>
       ) : null}
 
-      {threads.length > 0 ? (
-        <ol className="claims-threads">
-          {threads.map(({ claim, depth }) => {
-            const open = openThreads.has(claim.id);
-            const bodyId = `${headingBase}-thread-${claim.id}`;
-            const sources = uniqueSources(claim.sources).length;
-            const entities = uniqueEntities([...claim.entities], subjectLabel).length;
-            return (
-              <li
-                key={claim.id}
-                className="claim-thread"
-                data-confidence={claim.confidence}
-                data-depth={Math.min(depth, MAX_THREAD_DEPTH)}
-                data-open={open}
-              >
-                <button
-                  type="button"
-                  className="claim-thread-toggle"
-                  aria-expanded={open}
-                  aria-controls={open ? bodyId : undefined}
-                  onClick={() => toggleThread(claim.id)}
-                >
-                  <span className="claim-thread-head">
-                    <span
-                      className="claim-thread-badge"
-                      data-confidence={claim.confidence}
-                    >
-                      {identityConfidenceLabel(claim.confidence)}
-                    </span>
-                    <span className="claim-thread-meta">
-                      {claim.id === "root" ? "Sujeto" : `Vuelta ${claim.round}`}
-                    </span>
-                    <span className="claim-thread-meta">
-                      {sources} {sources === 1 ? "fuente" : "fuentes"}
-                    </span>
-                    {entities > 0 ? (
-                      <span className="claim-thread-meta">
-                        {entities} {entities === 1 ? "identidad" : "identidades"}
-                      </span>
-                    ) : null}
-                    <span className="claim-thread-chevron" aria-hidden="true">
-                      {open ? "−" : "+"}
-                    </span>
-                  </span>
-                  <span className="claim-thread-text">{claim.text}</span>
-                </button>
-
-                {open ? (
-                  <div id={bodyId} className="claim-thread-body">
-                    <ClaimEvidence
-                      claim={claim}
-                      subjectLabel={subjectLabel}
-                      onOpenEntity={openEntity}
-                      onInvestigate={onInvestigate}
-                      busy={busy}
-                    />
-                  </div>
-                ) : null}
-              </li>
-            );
-          })}
-        </ol>
-      ) : (
+      {claimCount === 0 ? (
         <p className="claims-empty">
           Todavía no hay afirmaciones sostenidas por una fuente.
         </p>
-      )}
+      ) : null}
     </section>
   );
 }
