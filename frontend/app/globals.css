@@ -5524,3 +5524,1047 @@ body:has(.identity-screen) .site-footer {
     overflow: visible;
   }
 }
+
+:root {
+  --ink: #0b0f0e;
+  --ink-deep: #070a09;
+  --ink-soft: #111715;
+  --ink-raised: #161d19;
+
+  --paper: #f3efe4;
+  --paper-deep: #e7e0d0;
+  --paper-2: #ece5d7;
+  --paper-ink: #121714;
+  --paper-muted: rgba(18, 23, 20, 0.62);
+  --paper-line: rgba(18, 23, 20, 0.17);
+
+  --lime: #d8ff3e;
+  --lime-dark: #4f6008;
+  --orange: #ff6b3d;
+
+  --muted: #8a948c;
+  --muted-strong: #b8bfb6;
+  --line: rgba(243, 239, 228, 0.15);
+  --line-strong: rgba(243, 239, 228, 0.28);
+
+  --display: Georgia, "Times New Roman", Times, serif;
+  --sans: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, Arial,
+    sans-serif;
+  --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+
+  --shell: min(1320px, calc(100vw - 72px));
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--ink);
+  scroll-behavior: smooth;
+  scroll-padding-top: 92px;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  overflow-x: hidden;
+  background:
+    radial-gradient(
+      ellipse at 82% -12%,
+      rgba(216, 255, 62, 0.07),
+      transparent 42%
+    ),
+    radial-gradient(
+      ellipse at -8% 58%,
+      rgba(255, 107, 61, 0.045),
+      transparent 38%
+    ),
+    var(--ink);
+  color: var(--paper);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, rgba(243, 239, 228, 0.028) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(243, 239, 228, 0.028) 1px, transparent 1px);
+  background-size: 84px 84px;
+  mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, 0.45) 70%, transparent 100%);
+}
+
+/* ==========================================================================
+   Identidad — red de entidades e hilos de afirmaciones
+   ========================================================================== */
+
+/* Galería de identidades: cada persona o institución es una tarjeta tipo foto */
+.claims-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: 0.85rem;
+  margin-top: 1.1rem;
+}
+
+.claims-gallery-item {
+  display: grid;
+}
+
+.claim-card {
+  display: grid;
+  grid-template-rows: auto auto auto 1fr auto;
+  gap: 0.3rem;
+  height: 100%;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  background: var(--ink-soft);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
+}
+
+.claim-card:hover {
+  border-color: var(--line-strong);
+  background: var(--ink);
+  transform: translateY(-2px);
+}
+
+.claim-card:focus-visible {
+  outline: 1px solid var(--lime);
+  outline-offset: 2px;
+}
+
+.claim-card[data-subject="true"] {
+  border-color: rgba(216, 255, 62, 0.45);
+}
+
+.claim-card[data-open="true"] {
+  border-color: var(--lime);
+  background: var(--ink);
+}
+
+.claim-card-photo {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 16 / 10;
+  width: 100%;
+  border: 1px solid var(--line);
+  background:
+    radial-gradient(circle at 50% 32%, rgba(216, 255, 62, 0.14), transparent 62%),
+    linear-gradient(160deg, var(--ink-deep), var(--ink-soft));
+  overflow: hidden;
+}
+
+.claim-card[data-subject="true"] .claim-card-photo {
+  background:
+    radial-gradient(circle at 50% 32%, rgba(216, 255, 62, 0.28), transparent 62%),
+    linear-gradient(160deg, var(--ink-deep), var(--ink-soft));
+}
+
+.claim-card[data-open="true"] .claim-card-photo {
+  border-color: rgba(216, 255, 62, 0.4);
+}
+
+.claim-card-initials {
+  font-family: var(--display);
+  font-size: clamp(1.6rem, 4vw, 2.4rem);
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--paper);
+}
+
+.claim-card[data-subject="true"] .claim-card-initials {
+  color: var(--lime);
+}
+
+.claim-card-type {
+  margin-top: 0.15rem;
+  font-family: var(--mono);
+  font-size: 0.46rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--lime);
+}
+
+.claim-card-name {
+  font-family: var(--display);
+  font-size: 1.2rem;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+  color: var(--paper);
+  overflow-wrap: anywhere;
+}
+
+.claim-card-description {
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: var(--muted-strong);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.claim-card-meta {
+  padding-top: 0.45rem;
+  border-top: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 0.46rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Conexiones: cada arista es la afirmación que une dos identidades */
+.claim-connections {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 1.4rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+
+.claim-connections .mono-label {
+  color: var(--lime);
+}
+
+.claim-connections-grid {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.claim-connection {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 3.4rem minmax(0, 1fr);
+  gap: 0.35rem 0.6rem;
+  align-items: center;
+  width: 100%;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--line);
+  background: var(--ink-soft);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.claim-connection:hover,
+.claim-connection:focus-visible {
+  border-color: var(--line-strong);
+  background: var(--ink);
+}
+
+.claim-connection:focus-visible {
+  outline: 1px solid var(--lime);
+  outline-offset: 2px;
+}
+
+.claim-connection[data-open="true"] {
+  border-color: var(--lime);
+  background: var(--ink);
+}
+
+.claim-connection-side {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.claim-connection-side[data-side="to"] {
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.claim-connection-photo {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 2.1rem;
+  aspect-ratio: 1;
+  border: 1px solid var(--line-strong);
+  background: var(--ink-deep);
+}
+
+.claim-connection-photo .claim-card-initials {
+  font-size: 0.78rem;
+}
+
+.claim-connection-name {
+  font-family: var(--display);
+  font-size: 0.95rem;
+  line-height: 1.15;
+  color: var(--paper);
+  overflow-wrap: anywhere;
+}
+
+.claim-connection-thread {
+  position: relative;
+  height: 1px;
+  background: var(--line-strong);
+}
+
+.claim-connection-thread::before,
+.claim-connection-thread::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--lime);
+  transform: translateY(-50%);
+}
+
+.claim-connection-thread::before {
+  left: 0;
+}
+
+.claim-connection-thread::after {
+  right: 0;
+}
+
+.claim-connection[data-open="true"] .claim-connection-thread {
+  background: var(--lime);
+}
+
+.claim-connection-meta {
+  grid-column: 1 / -1;
+  font-family: var(--mono);
+  font-size: 0.46rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.claim-connection[data-open="true"] .claim-connection-meta {
+  color: var(--muted-strong);
+}
+
+.claim-connection-detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.8rem;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.claim-connection-pair {
+  font-family: var(--display);
+  font-size: 1.1rem;
+  line-height: 1.2;
+  color: var(--paper);
+}
+
+@media (max-width: 620px) {
+  .claim-connection {
+    grid-template-columns: minmax(0, 1fr) 1.6rem minmax(0, 1fr);
+    padding: 0.55rem 0.6rem;
+  }
+
+  .claim-connection-name {
+    font-size: 0.86rem;
+  }
+}
+
+.claims-threads {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1.2rem;
+  padding: 0;
+  list-style: none;
+}
+
+.claim-thread {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--line-strong);
+  background: var(--ink-soft);
+}
+
+.claim-thread[data-confidence="corroborated"] {
+  border-left-color: var(--lime);
+}
+
+.claim-thread[data-confidence="probable"] {
+  border-left-color: var(--orange);
+}
+
+.claim-thread[data-confidence="uncertain"] {
+  border-left-color: rgba(255, 154, 138, 0.7);
+}
+
+.claim-thread[data-depth="1"] {
+  margin-left: 1.1rem;
+}
+
+.claim-thread[data-depth="2"] {
+  margin-left: 2.2rem;
+}
+
+.claim-thread[data-depth="3"] {
+  margin-left: 3.3rem;
+}
+
+.claim-thread-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.6rem;
+  align-items: center;
+}
+
+.claim-thread-badge {
+  padding: 0.1rem 0.4rem;
+  border: 1px solid currentColor;
+  font-family: var(--mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted-strong);
+}
+
+.claim-thread[data-confidence="corroborated"] .claim-thread-badge {
+  color: var(--lime);
+}
+
+.claim-thread[data-confidence="probable"] .claim-thread-badge {
+  color: var(--orange);
+}
+
+.claim-thread-meta {
+  font-family: var(--mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.claim-thread-text {
+  display: block;
+  font-size: 0.98rem;
+  line-height: 1.45;
+  color: var(--paper);
+}
+
+.claim-thread-toggle {
+  display: grid;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.claim-thread-toggle:hover .claim-thread-text,
+.claim-thread-toggle:focus-visible .claim-thread-text {
+  color: var(--lime);
+}
+
+.claim-thread-toggle:focus-visible {
+  outline: 1px solid var(--lime);
+  outline-offset: 4px;
+}
+
+.claim-thread-chevron {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 0.9rem;
+  line-height: 1;
+  color: var(--muted);
+}
+
+.claim-thread[data-open="true"] .claim-thread-chevron {
+  color: var(--lime);
+}
+
+.claim-thread-body {
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--line);
+}
+
+.claim-thread-badge[data-confidence="corroborated"] {
+  color: var(--lime);
+}
+
+.claim-thread-badge[data-confidence="probable"] {
+  color: var(--orange);
+}
+
+.claim-thread-badge[data-confidence="uncertain"] {
+  color: rgba(255, 154, 138, 0.9);
+}
+
+.claim-thread-relation {
+  border-color: var(--lime);
+  color: var(--lime);
+}
+
+.claim-evidence {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.claim-evidence-scroll {
+  overflow-x: auto;
+}
+
+.claim-evidence-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.claim-evidence-table th,
+.claim-evidence-table td {
+  padding: 0.38rem 0.55rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.claim-evidence-table th {
+  font-family: var(--mono);
+  font-size: 0.5rem;
+  font-weight: 400;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.claim-evidence-table td {
+  color: var(--muted-strong);
+}
+
+.claim-evidence-table td:first-child {
+  white-space: nowrap;
+}
+
+.claim-evidence-table a {
+  color: var(--paper);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+  text-decoration-color: var(--line-strong);
+}
+
+.claim-evidence-table a:hover {
+  text-decoration-color: var(--lime);
+}
+
+.claim-detail {
+  margin-top: 0.9rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--lime);
+  background: var(--ink-soft);
+}
+
+.claim-detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 0.7rem;
+}
+
+.claim-detail-close {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--muted-strong);
+  font-family: var(--mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.claim-detail-close:hover {
+  border-color: var(--lime);
+  color: var(--lime);
+}
+
+.claim-thread-entity {
+  padding: 0.22rem 0.5rem;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--muted-strong);
+  font-family: var(--mono);
+  font-size: 0.52rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  transition: border-color 0.2s ease, color 0.2s ease;
+}
+
+.claim-thread-entity:hover:not(:disabled) {
+  border-color: var(--lime);
+  color: var(--lime);
+}
+
+.claim-thread-entity:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.claim-thread-action {
+  justify-self: start;
+  padding: 0.3rem 0.55rem;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--paper);
+  font-family: var(--mono);
+  font-size: 0.52rem;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.claim-thread-action:hover:not(:disabled) {
+  border-color: var(--lime);
+  color: var(--lime);
+}
+
+.claim-thread-action:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* Tabla de afirmaciones: desde → relación → hacia */
+.claim-affirmations-table {
+  min-width: 46rem;
+}
+
+.claim-affirmations-table td {
+  line-height: 1.4;
+}
+
+.claim-affirmations-table td:first-child {
+  white-space: normal;
+}
+
+.claim-affirmations-table .claim-thread-entity {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--paper);
+  font-family: inherit;
+  font-size: 0.82rem;
+  letter-spacing: 0;
+  text-transform: none;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 0.15em;
+}
+
+.claim-affirmations-table .claim-thread-entity:hover:not(:disabled) {
+  color: var(--lime);
+  text-decoration-color: var(--lime);
+}
+
+.claim-row-text {
+  min-width: 13rem;
+  color: var(--paper);
+}
+
+.claim-row-relation {
+  color: var(--lime);
+  font-family: var(--mono);
+  font-size: 0.56rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.claim-row-score {
+  margin-left: 0.35rem;
+  font-family: var(--mono);
+  font-size: 0.5rem;
+  color: var(--muted);
+}
+
+.claim-row-sources {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 12rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.claim-row-sources li {
+  display: grid;
+  gap: 0.05rem;
+}
+
+.claim-row-sources span {
+  font-family: var(--mono);
+  font-size: 0.46rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Ficha de una identidad del mapa */
+.claim-node-detail {
+  gap: 0.75rem;
+}
+
+.claim-node-head {
+  display: flex;
+  gap: 0.7rem;
+  align-items: center;
+}
+
+.claim-node-photo {
+  flex: 0 0 auto;
+  width: 3.1rem;
+  aspect-ratio: 1;
+}
+
+.claim-node-photo .claim-card-initials {
+  font-size: 1.25rem;
+}
+
+.claim-node-title {
+  margin: 0;
+  font-size: 1.1rem;
+  line-height: 1.25;
+  color: var(--paper);
+}
+
+.claim-node-meta {
+  font-family: var(--mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.claim-node-description {
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: var(--muted-strong);
+}
+
+/* Ficha completa de la identidad, reusada del perfil del sujeto */
+.claim-node-profile {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.claim-node-open {
+  font-size: 0.86rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.claim-node-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.claim-node-sources {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.claims-empty {
+  margin-top: 1rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+/* ==========================================================================
+   Estilos para la red de nodos y afirmaciones (fin)
+   ========================================================================== */
+
+/* ==========================================================================
+   Identidad — fases, vista previa y conexiones
+   ========================================================================== */
+
+.identity-candidate.is-expanded {
+  outline: 1px dashed rgba(18, 23, 20, 0.4);
+  outline-offset: 3px;
+}
+
+.identity-candidate.is-confirmed {
+  outline: 2px solid var(--lime);
+  outline-offset: 3px;
+}
+
+.identity-candidate.is-confirmed button {
+  background: var(--lime-dark);
+  color: var(--paper);
+  cursor: default;
+}
+
+.identity-preview {
+  display: grid;
+  gap: 0.6rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--paper-line);
+}
+
+.identity-preview-text {
+  color: rgba(18, 23, 20, 0.78);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.identity-preview-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem 0.9rem;
+}
+
+.identity-preview-fields dt {
+  font-family: var(--mono);
+  font-size: 0.52rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--paper-muted);
+}
+
+.identity-preview-fields dd {
+  margin: 0.2rem 0 0;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+
+.identity-preview-sources {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.identity-preview-hint {
+  font-family: var(--mono);
+  font-size: 0.55rem;
+  line-height: 1.5;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--paper-muted);
+}
+
+.identity-subject {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+  gap: 1rem 1.6rem;
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  background: var(--ink-soft);
+}
+
+.identity-subject .mono-label {
+  color: var(--lime);
+}
+
+.identity-subject p:not(.mono-label) {
+  margin-top: 0.35rem;
+  color: var(--muted-strong);
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.identity-connections {
+  margin-top: 2.2rem;
+  padding-top: 1.4rem;
+  border-top: 1px solid var(--line);
+}
+
+.identity-connections-head h3 {
+  margin-top: 0.35rem;
+  font-family: var(--display);
+  font-size: clamp(1.7rem, 3vw, 2.4rem);
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  color: var(--paper);
+}
+
+.identity-weaving {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1.1rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  background: var(--ink-soft);
+}
+
+.identity-weaving > p:first-child {
+  font-family: var(--mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--lime);
+}
+
+.identity-weaving-thread {
+  display: block;
+  height: 1px;
+  background: linear-gradient(90deg, var(--lime), rgba(216, 255, 62, 0));
+  transform-origin: left center;
+  animation: weave-thread 2.4s ease-in-out infinite;
+}
+
+.identity-weaving-branch {
+  font-size: 0.86rem;
+  line-height: 1.4;
+  color: var(--muted-strong);
+  overflow-wrap: anywhere;
+}
+
+@keyframes weave-thread {
+  0% {
+    transform: scaleX(0.05);
+    opacity: 0.9;
+  }
+
+  70% {
+    transform: scaleX(1);
+    opacity: 0.55;
+  }
+
+  100% {
+    transform: scaleX(1);
+    opacity: 0.15;
+  }
+}
+
+.identity-phases {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.identity-phase {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.6rem;
+  align-items: center;
+  font-size: 0.92rem;
+  color: var(--muted);
+}
+
+.identity-phase-mark {
+  width: 8px;
+  height: 8px;
+  border: 1px solid var(--line-strong);
+}
+
+.identity-phase[data-state="past"] {
+  color: var(--muted-strong);
+}
+
+.identity-phase[data-state="past"] .identity-phase-mark {
+  background: var(--lime);
+  border-color: var(--lime);
+  opacity: 0.5;
+}
+
+.identity-phase[data-state="current"] {
+  color: var(--paper);
+}
+
+.identity-phase[data-state="current"] .identity-phase-mark {
+  background: var(--lime);
+  border-color: var(--lime);
+  box-shadow: 0 0 0 4px rgba(216, 255, 62, 0.16);
+}
+
+.identity-weaving-note {
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.identity-stop {
+  margin-top: 1rem;
+  font-family: var(--mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.identity-retry {
+  justify-self: start;
+  margin-top: 0.9rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--lime);
+  background: transparent;
+  color: var(--lime);
+  font-family: var(--mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.identity-retry:hover {
+  background: var(--lime);
+  color: var(--ink);
+}
+
+.identity-connection-trace {
+  margin-top: 1.6rem;
+}
+
+.claims-web {
+  display: grid;
+  gap: 0.9rem;
+  margin-top: 1.4rem;
+}
+
+.claims-web-head {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.claims-web-lead {
+  max-width: 62ch;
+  color: var(--muted-strong);
+  font-size: 0.95rem;
+  line-height: 1.55;
+}
+
+.claims-web-meta {
+  font-family: var(--mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--lime);
+}
+
+@media (max-width: 900px) {
+  .identity-subject {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 620px) {
+  .identity-preview-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

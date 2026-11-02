@@ -20,6 +20,12 @@ import {
   emptyIdentityField,
   identityFieldLabel,
   type IdentityCandidate,
+  type IdentityClaim,
+  type IdentityConfidence,
+  type IdentityConnectionState,
+  type IdentityConnectionsRequest,
+  type IdentityConnectionsResponse,
+  type IdentityEntity,
   type IdentityDecision,
   type IdentityField,
   type IdentityFieldKey,
@@ -28,11 +34,13 @@ import {
   type IdentityInvestigationResponse,
   type IdentityPlan,
   type IdentityPlanQuery,
+  type IdentityProfileType,
   type IdentityQueryResult,
   type IdentityRound,
   type IdentitySearchItem,
   type IdentitySource,
   type IdentitySourceRef,
+  type IdentitySummary,
   type IdentityToolQuery,
 } from "@consta/contracts";
 import {
@@ -320,11 +328,16 @@ function modelCallOptions(env: GeneralEnv, maxTokens: number) {
 
 function logModelFailure(
   stage: string,
-  attempts: Array<{ model: string; code?: string }>,
+  attempts: Array<{ provider?: string; model: string; code?: string }>,
   code: string | undefined,
 ): void {
   const summary = attempts
-    .map((attempt) => `${attempt.model}:${attempt.code ?? "ok"}`)
+    .map(
+      (attempt) =>
+        `${attempt.provider ? `${attempt.provider}/` : ""}${attempt.model}:${
+          attempt.code ?? "ok"
+        }`,
+    )
     .join(", ");
   console.error(`[consta-api] identity ${stage}`, code ?? "error", summary);
 }
@@ -1943,5 +1956,1483 @@ export async function investigateIdentity(
       message: "La investigación de identidad no pudo completarse.",
       retryable: true,
     });
+  }
+}
+
+function emptyConnectionState(): IdentityConnectionState {
+  return {
+    claims: [],
+    rounds: [],
+    summary: {
+      who: "Sin contexto.",
+      findings: "Todavía no hay afirmaciones probables.",
+      text: "Sin contexto. Todavía no hay afirmaciones probables.",
+      claims: 0,
+    },
+    canContinue: false,
+    stoppedReason: null,
+  };
+}
+
+function connectionWho(candidate: IdentityCandidate, name: string): string {
+  const type = candidate.fields.find((field) => field.key === "type");
+  const occupation = candidate.fields.find((field) => field.key === "occupation");
+  const nationality = candidate.fields.find((field) => field.key === "nationality");
+  const address = candidate.fields.find((field) => field.key === "address");
+
+  const typeText = type?.value === "person" ? "persona" : type?.value === "enterprise" ? "empresa" : "sin tipo";
+  const occupationText = occupation?.value || "sin ocupación";
+  const nationalityText = nationality?.value || "sin nacionalidad";
+  const addressText = address?.value || "sin dirección";
+
+  return `${typeText}, ${occupationText}, ${nationalityText}, ${addressText}`.trim();
+}
+
+function candidateLabel(candidate: IdentityCandidate, name: string): string {
+  const label = candidate.label || name;
+  const nameField = candidate.fields.find((field) => field.key === "name");
+  return nameField?.value || label;
+}
+
+function buildRootClaim(name: string, candidate: IdentityCandidate): IdentityClaim {
+  const label = candidateLabel(candidate, name);
+  const sources = candidate.fields.flatMap((field) => field.sources).slice(0, 5);
+  return {
+    id: "root",
+    text: `El sujeto investigado es ${label}.`,
+    parentId: null,
+    parentText: "",
+    sources,
+    entities: [
+      {
+        id: candidate.id,
+        label,
+        type: profileType(candidate.fields.find((field) => field.key === "type")?.value),
+        description: candidate.description,
+        sources,
+        score: null,
+        confidence: null,
+      },
+    ],
+    score: 0,
+    confidence: "uncertain",
+    round: 0,
+  };
+}
+
+function buildSubjectEntity(
+  name: string,
+  candidate: IdentityCandidate,
+  root: IdentityClaim,
+): IdentityEntity {
+  const label = candidateLabel(candidate, name);
+  const type = profileType(candidate.fields.find((field) => field.key === "type")?.value);
+  const sources = candidate.fields.flatMap((field) => field.sources).slice(0, 5);
+
+  return {
+    id: candidate.id,
+    label,
+    type,
+    description: candidate.description,
+    sources,
+    score: null,
+    confidence: null,
+  };
+}
+
+/** El tipo que declara el contrato; cualquier otro valor queda en "unknown". */
+function profileType(value: string | null | undefined): IdentityProfileType {
+  return value === "person" || value === "enterprise" ? value : "unknown";
+}
+
+/** Misma normalización que usa la vista de conexiones para emparejar textos. */
+function normalizeClaimText(value: string): string {
+  return value
+    .toLocaleLowerCase("es")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Conserva el resumen acumulado: las vueltas siguientes no deben borrar el
+ * hilo conductor que ya se explicó. El respaldo solo entra si el estado
+ * guardado viene vacío.
+ */
+function resolveConnectionSummary(
+  summary: IdentitySummary | undefined,
+  fallback: { who: string; findings: string; text: string; claims: number },
+): IdentitySummary {
+  const who = summary?.who?.trim() || fallback.who;
+  const findings = summary?.findings?.trim() || fallback.findings;
+  return {
+    who,
+    findings,
+    text: summary?.text?.trim() || fallback.text,
+    claims:
+      typeof summary?.claims === "number" && summary.claims > 0
+        ? summary.claims
+        : fallback.claims,
+  };
+}
+
+/**
+ * El modelo a veces devuelve la lista suelta y a veces dentro de su clave.
+ * Sin esto, una respuesta correcta como `{ "queries": [...] }` se lee como
+ * vacía y la vuelta se detiene sin buscar.
+ */
+function readListPayload(value: unknown, key: string): unknown[] | null {
+  if (Array.isArray(value)) return value;
+  if (!isRecord(value)) return null;
+  if (Array.isArray(value[key])) return value[key] as unknown[];
+  for (const wrapper of ["plan", "result", "data", "output"] as const) {
+    const nested = value[wrapper];
+    if (isRecord(nested) && Array.isArray(nested[key])) {
+      return nested[key] as unknown[];
+    }
+  }
+  return null;
+}
+
+/** Texto legible de una línea de `findings`, venga como texto u objeto. */
+function summaryLine(value: unknown): string | null {
+  if (typeof value === "string") return value.trim() || null;
+  if (!isRecord(value)) return null;
+  for (const key of ["details", "detail", "text", "finding", "summary"] as const) {
+    const candidate = value[key];
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  }
+  return null;
+}
+
+/** Lee el JSON del resumen; `findings` puede llegar como lista o como texto. */
+function readConnectionRoundSummary(value: unknown): IdentitySummary | null {
+  const payload =
+    isRecord(value) && isRecord(value.summary) ? value.summary : value;
+  if (typeof payload === "string") {
+    const findings = payload.trim();
+    return findings ? { who: "", findings, text: findings, claims: 0 } : null;
+  }
+  if (!isRecord(payload)) return null;
+  const raw = payload.findings ?? payload.hallazgos;
+  const lines = Array.isArray(raw)
+    ? raw.map(summaryLine).filter((line): line is string => Boolean(line))
+    : (() => {
+        const single = summaryLine(raw);
+        return single ? [single] : [];
+      })();
+  if (lines.length === 0) {
+    const fallback = summaryLine(payload.summary) ?? summaryLine(payload.text);
+    if (!fallback) return null;
+    lines.push(fallback);
+  }
+  const findings = lines.join("\n");
+  const who = clip(payload.who, 400) ?? "";
+  return { who, findings, text: `${who} ${findings}`.trim(), claims: 0 };
+}
+
+/**
+ * Convierte las afirmaciones crudas del modelo en afirmaciones citables:
+ * los índices se vuelven enlaces reales y cada afirmación se puntúa por las
+ * fuentes que cita. Una afirmación sin fuentes no entra.
+ */
+function buildConnectionClaims(
+  value: unknown,
+  items: readonly IdentitySearchItem[],
+  entities: readonly IdentityEntity[],
+  round: number,
+  prior: readonly IdentityClaim[],
+): IdentityClaim[] | null {
+  const raw = readConnectionClaims(value);
+  if (!raw) return null;
+
+  const subjectLabel =
+    prior.find((claim) => claim.id === "root")?.entities[0]?.label ?? "";
+
+  const claims: IdentityClaim[] = [];
+  for (const claim of raw) {
+    const sources = readConnectionClaimSources(claim, items);
+    if (sources.length === 0) continue;
+    const score = readConnectionClaimScore(claim, sources);
+    claims.push({
+      id: `claim-${round}-${claims.length}`,
+      text: claim.text,
+      parentId: null,
+      parentText: claim.parentText,
+      sources,
+      entities: readConnectionClaimEntities(claim, entities, subjectLabel),
+      score,
+      confidence: confidenceForScore(score),
+      round,
+    });
+  }
+  if (claims.length === 0) return null;
+
+  const byText = new Map<string, string>();
+  for (const claim of prior) {
+    const key = normalizeClaimText(claim.text);
+    if (key && !byText.has(key)) byText.set(key, claim.id);
+  }
+  for (const claim of claims) {
+    const key = normalizeClaimText(claim.text);
+    if (key && !byText.has(key)) byText.set(key, claim.id);
+  }
+  for (const claim of claims) {
+    const key = normalizeClaimText(claim.parentText);
+    const parentId = key ? byText.get(key) : undefined;
+    claim.parentId = parentId && parentId !== claim.id ? parentId : null;
+  }
+
+  return claims;
+}
+
+
+interface RawConnectionClaim {
+  text: string;
+  parentText: string;
+  indexes: number[];
+}
+
+function readConnectionClaimText(value: unknown, generic: boolean): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  if (!normalized || normalized.length === 0) return null;
+  if (generic && normalized.length > 400) return null;
+  if (normalized.toLocaleLowerCase("es").includes("sin evidencia")) return null;
+  if (normalized.toLocaleLowerCase("es").includes("no hay afirmaciones")) return null;
+  if (normalized.toLocaleLowerCase("es").includes("sin resultados")) return null;
+  if (normalized.toLocaleLowerCase("es").includes("sin conexiones")) return null;
+  if (normalized.toLocaleLowerCase("es").includes("sin información")) return null;
+  if (normalized.toLocaleLowerCase("es").includes("sin datos")) return null;
+  if (normalized.toLocaleLowerCase("es").includes("sin fuentes")) return null;
+  if (normalized.toLocaleLowerCase("es").includes("sin evidencia")) return null;
+  if (normalized.toLocaleLowerCase("es").includes("sin pruebas")) return null;
+  if (normalized.toLocaleLowerCase("es").includes("sin respaldo")) return null;
+  return normalized;
+}
+
+function readConnectionClaim(value: unknown): RawConnectionClaim | null {
+  if (!isRecord(value)) return null;
+  const text = readConnectionClaimText(value.text, false);
+  if (!text) return null;
+  const parentText = readConnectionClaimText(value.parentText, true);
+  if (!parentText) return null;
+  if (!Array.isArray(value.indexes)) return null;
+  const indexes = value.indexes.filter((index): index is number => typeof index === "number" && index >= 0);
+  if (indexes.length === 0) return null;
+  return {
+    text,
+    parentText,
+    indexes,
+  };
+}
+
+function readConnectionClaims(value: unknown): RawConnectionClaim[] | null {
+  const list = readListPayload(value, "claims");
+  if (!list) return null;
+  const claims: RawConnectionClaim[] = [];
+  for (const entry of list) {
+    const claim = readConnectionClaim(entry);
+    if (!claim) continue;
+    claims.push(claim);
+  }
+  return claims.length > 0 ? claims : null;
+}
+
+function readConnectionEntities(
+  value: unknown,
+  items: readonly IdentitySearchItem[] = [],
+): IdentityEntity[] | null {
+  const list = readListPayload(value, "entities");
+  if (!list) return null;
+  const entities: IdentityEntity[] = [];
+  const seen = new Set<string>();
+
+  for (const entry of list) {
+    if (!isRecord(entry)) continue;
+    const label = clip(entry.label, 180);
+    if (!label) continue;
+    const key = normalizeClaimText(label);
+    if (!key || seen.has(key)) continue;
+    // "Familia de X" no es una identidad con la que se pueda establecer una
+    // relación; su nodo solo repite al sujeto.
+    if (/^familia (de|del) /.test(key)) continue;
+    seen.add(key);
+
+    const id =
+      clip(entry.id, 40) ?? key.replace(/\s+/g, "-").slice(0, 40);
+    const type = profileType(clip(entry.type, 40));
+    const description = clip(entry.description, 500) ?? "";
+    const indexes = Array.isArray(entry.indexes)
+      ? entry.indexes.filter(
+          (index): index is number => typeof index === "number" && index >= 0,
+        )
+      : [];
+
+    // Las fuentes de la entidad son las mismas de la vuelta: primero las que
+    // el modelo citó por número y, si no citó, las que nombran a la entidad.
+    const sources: IdentitySourceRef[] = [];
+    const seenUrls = new Set<string>();
+    for (const index of indexes) {
+      const item = items[index];
+      if (!item || seenUrls.has(item.url)) continue;
+      seenUrls.add(item.url);
+      sources.push({ source: item.source, title: item.title, url: item.url });
+    }
+    if (sources.length === 0) {
+      for (const source of readConnectionSources(
+        items.filter((item) => itemMentions(item, [label])),
+      )) {
+        sources.push(source);
+      }
+    }
+
+    entities.push({
+      id,
+      label,
+      type,
+      description,
+      sources,
+      score: null,
+      confidence: null,
+    });
+  }
+  return entities;
+}
+
+function readConnectionSources(items: readonly IdentitySearchItem[]): IdentitySourceRef[] {
+  const sources: IdentitySourceRef[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (seen.has(item.url)) continue;
+    seen.add(item.url);
+    sources.push({
+      source: item.source,
+      title: item.title,
+      url: item.url,
+    });
+  }
+  return sources;
+}
+
+/* --------------------------------------------------------------------------
+   Ficha de cada entidad: se reutiliza el motor de identidad
+   -------------------------------------------------------------------------- */
+
+const MAX_ENTITY_PROFILES = 12;
+const ENTITY_PROFILE_CONCURRENCY = 4;
+
+/** Cuánto sostiene una fuente los campos de un candidato. */
+function candidateStrength(candidate: IdentityCandidate): number {
+  let total = 0;
+  for (const field of candidate.fields) {
+    if (!field.value?.trim() || field.status === "not_found") continue;
+    total += field.score ?? 1;
+  }
+  return total;
+}
+
+/**
+ * El nombre que devuelve la entidad y el del candidato rara vez son idénticos
+ * ("Germán Ávila" y "Germán Ávila Plazas"). Se exige nombre completo o
+ * contención; una etiqueta de una sola palabra solo vale exacta para no
+ * atribuir una ficha de homónimo.
+ */
+function candidateLabelMatch(candidateLabel: string, label: string): number {
+  const a = normalizeClaimText(candidateLabel);
+  const b = normalizeClaimText(label);
+  if (!a || !b) return 0;
+  if (a === b) return 3;
+  if (b.split(" ").length < 2 && a.split(" ").length < 2) return 0;
+  if (a.includes(b) || b.includes(a)) return 2;
+  if (mentionsEntity(candidateLabel, label) || mentionsEntity(label, candidateLabel)) {
+    return 1;
+  }
+  return 0;
+}
+
+/**
+ * La IA propone los candidatos durante la investigación; aquí se elige el que
+ * coincide con la entidad y tiene más campos sostenidos. No hay clic humano:
+ * la ficha queda lista para cuando el periodista abra la tarjeta.
+ */
+function pickEntityProfile(
+  candidates: readonly IdentityCandidate[],
+  label: string,
+): IdentityCandidate | null {
+  let best: IdentityCandidate | null = null;
+  let bestScore = 0;
+  for (const candidate of candidates) {
+    const match = candidateLabelMatch(candidate.label, label);
+    if (match === 0) continue;
+    const total = match * 1000 + candidateStrength(candidate);
+    if (total > bestScore) {
+      bestScore = total;
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+function profileSources(candidate: IdentityCandidate): IdentitySourceRef[] {
+  const sources: IdentitySourceRef[] = [];
+  const seen = new Set<string>();
+  for (const field of candidate.fields) {
+    for (const source of field.sources) {
+      if (!source.url || seen.has(source.url)) continue;
+      seen.add(source.url);
+      sources.push(source);
+    }
+  }
+  return sources;
+}
+
+interface ProfiledEntities {
+  entities: IdentityEntity[];
+  /** Afirmaciones anteriores con las fichas nuevas ya pegadas. */
+  claims: IdentityClaim[];
+}
+
+/**
+ * Para cada entidad nueva se corre el mismo motor de investigación de
+ * identidad que usa el flujo manual. La diferencia es que aquí nadie elige:
+ * el candidato con mejor coincidencia y más campos queda adjunto como
+ * `profile`. Los perfiles ya resueltos se reutilizan entre vueltas y, si una
+ * vuelta anterior dejó entidades sin ficha, esta vuelta las completa.
+ */
+async function attachEntityProfiles(
+  env: GeneralEnv,
+  entities: IdentityEntity[],
+  prior: readonly IdentityClaim[],
+  subjectLabel?: string,
+): Promise<ProfiledEntities> {
+  const subjectKey = subjectLabel ? normalizeClaimText(subjectLabel) : "";
+  const cached = new Map<string, IdentityCandidate>();
+  for (const claim of prior) {
+    for (const entity of claim.entities) {
+      if (!entity.profile) continue;
+      const key = normalizeClaimText(entity.label);
+      if (key && !cached.has(key)) cached.set(key, entity.profile);
+    }
+  }
+
+  // El sujeto ya tiene su ficha confirmada en el panel; no se vuelve a
+  // investigar aquí ni se paga otra ronda de búsquedas por él. Las entidades
+  // de esta vuelta van primero y las pendientes de vueltas anteriores después.
+  const pending = new Map<string, string>();
+  const addPending = (entity: IdentityEntity) => {
+    const key = normalizeClaimText(entity.label);
+    if (!key || key === subjectKey || cached.has(key) || pending.has(key)) return;
+    pending.set(key, entity.label);
+  };
+  for (const entity of entities) addPending(entity);
+  for (const claim of prior) {
+    for (const entity of claim.entities) addPending(entity);
+  }
+
+  const queue = [...pending.entries()]
+    .slice(0, MAX_ENTITY_PROFILES)
+    .map(([key, label]) => ({ key, label }));
+  const resolved = new Map<string, IdentityCandidate>();
+  const workers = Array.from(
+    { length: Math.min(ENTITY_PROFILE_CONCURRENCY, queue.length) },
+    async () => {
+      for (let item = queue.shift(); item; item = queue.shift()) {
+        const investigation = await investigateIdentity(env, item.label);
+        const profile = pickEntityProfile(investigation.candidates ?? [], item.label);
+        if (profile) resolved.set(item.key, profile);
+      }
+    },
+  );
+  await Promise.all(workers);
+
+  const attach = (entity: IdentityEntity): IdentityEntity => {
+    const key = normalizeClaimText(entity.label);
+    const profile = (key ? resolved.get(key) : null) ?? cached.get(key) ?? null;
+    if (!profile) return entity;
+    const sources = profileSources(profile);
+    return {
+      ...entity,
+      profile,
+      description: entity.description || profile.description,
+      sources: uniqueConnectionSources([...entity.sources, ...sources]),
+    };
+  };
+
+  return {
+    entities: entities.map(attach),
+    claims: prior.map((claim) => ({
+      ...claim,
+      entities: claim.entities.map(attach),
+    })),
+  };
+}
+
+function uniqueConnectionSources(sources: IdentitySourceRef[]): IdentitySourceRef[] {
+  const out: IdentitySourceRef[] = [];
+  const seen = new Set<string>();
+  for (const source of sources) {
+    if (!source.url || seen.has(source.url)) continue;
+    seen.add(source.url);
+    out.push(source);
+  }
+  return out.slice(0, 8);
+}
+
+function readConnectionClaimSources(claim: RawConnectionClaim, items: readonly IdentitySearchItem[]): IdentitySourceRef[] {
+  const sources: IdentitySourceRef[] = [];
+  const seen = new Set<string>();
+  for (const index of claim.indexes) {
+    if (index < 0 || index >= items.length) continue;
+    const item = items[index];
+    if (!item) continue;
+    if (seen.has(item.url)) continue;
+    seen.add(item.url);
+    sources.push({
+      source: item.source,
+      title: item.title,
+      url: item.url,
+    });
+  }
+  return sources;
+}
+
+const ENTITY_STOPWORDS = new Set([
+  "del",
+  "las",
+  "los",
+  "para",
+  "por",
+  "con",
+  "una",
+  "uno",
+  "the",
+  "and",
+]);
+
+/**
+ * Las fuentes nombran a la persona con menos palabras que la entidad
+ * ("Germán Ávila" por "Germán Ávila Plazas"). Exigir el nombre completo
+ * dejaba sin nudo a los familiares que la afirmación sí menciona.
+ *
+ * `subjectLabel` evita el caso contrario: un familiar puede llamarse igual
+ * que el sujeto más un apellido ("Gustavo Petro Sierra"). Ahí las palabras
+ * compartidas describen al sujeto, así que solo vale el nombre completo.
+ */
+export function mentionsEntity(
+  text: string,
+  label: string,
+  subjectLabel?: string,
+): boolean {
+  const body = normalizeClaimText(text);
+  const target = normalizeClaimText(label);
+  if (!body || !target) return false;
+  if (body.includes(target)) return true;
+
+  const subject = subjectLabel ? normalizeClaimText(subjectLabel) : "";
+  if (subject && target.startsWith(`${subject} `)) return false;
+
+  const tokens = target
+    .split(" ")
+    .filter((token) => token.length >= 3 && !ENTITY_STOPWORDS.has(token));
+  if (tokens.length === 0) return false;
+  const hits = tokens.filter((token) => body.includes(token));
+  if (tokens.length === 1) return hits.length === 1;
+  // El ancla es el primer apellido cuando el nombre tiene tres palabras o
+  // más, y el apellido único cuando solo hay dos ("José Ramírez").
+  const anchor = tokens.length >= 3 ? tokens[1] : tokens[tokens.length - 1];
+  return hits.length >= 2 && hits.includes(anchor);
+}
+
+function readConnectionClaimEntities(
+  claim: RawConnectionClaim,
+  entities: readonly IdentityEntity[],
+  subjectLabel?: string,
+): IdentityEntity[] {
+  return entities.filter((entity) =>
+    mentionsEntity(claim.text, entity.label, subjectLabel),
+  );
+}
+
+/**
+ * Separa las identidades que ya tienen un vínculo afirmado con el sujeto de
+ * las que solo aparecen conectadas a otra identidad. Las segundas son ramas
+ * abiertas: la vuelta siguiente debe intentar cerrarlas contra el sujeto y,
+ * si la evidencia no alcanza, dejar de profundizar por ahí.
+ */
+export function connectionBranches(
+  claims: readonly IdentityClaim[],
+  subjectLabel: string,
+): { linked: string[]; open: string[] } {
+  const subjectKey = normalizeClaimText(subjectLabel);
+  const labels = new Map<string, string>();
+  const linked = new Set<string>();
+  const indirect = new Set<string>();
+
+  for (const claim of claims) {
+    if (claim.id === "root") continue;
+    const entities = claim.entities.filter(
+      (entity) => normalizeClaimText(entity.label) !== subjectKey,
+    );
+    if (entities.length === 0) continue;
+
+    for (const entity of entities) {
+      const key = normalizeClaimText(entity.label);
+      if (key && !labels.has(key)) labels.set(key, entity.label);
+    }
+
+    // Una afirmación de la primera vuelta cuelga del sujeto aunque no lo
+    // nombre: "Su hermano José Ramírez fue viceministro".
+    const direct =
+      (Boolean(subjectKey) &&
+        mentionsEntity(claim.text, subjectLabel, subjectLabel)) ||
+      claim.parentId === "root" ||
+      (!claim.parentId && entities.length === 1);
+
+    if (direct) {
+      for (const entity of entities) {
+        const key = normalizeClaimText(entity.label);
+        if (key) linked.add(key);
+      }
+      continue;
+    }
+
+    // Solo hay cadena entre identidades cuando la afirmación nombra a dos o
+    // más, o cuando cuelga de otra afirmación ya conectada.
+    if (entities.length >= 2 || claim.parentId) {
+      for (const entity of entities) {
+        const key = normalizeClaimText(entity.label);
+        if (key) indirect.add(key);
+      }
+    }
+  }
+
+  return {
+    linked: [...linked].map((key) => labels.get(key) ?? key),
+    open: [...indirect]
+      .filter((key) => !linked.has(key))
+      .map((key) => labels.get(key) ?? key),
+  };
+}
+
+function readConnectionClaimConfidence(claim: RawConnectionClaim, sources: IdentitySourceRef[]): IdentityConfidence {
+  const uniqueSources = new Set<string>();
+  for (const source of sources) {
+    uniqueSources.add(source.url);
+  }
+  const uniqueCount = uniqueSources.size;
+  if (uniqueCount === 0) return "uncertain";
+  if (uniqueCount === 1) return "probable";
+  return "corroborated";
+}
+
+function readConnectionClaimScore(claim: RawConnectionClaim, sources: IdentitySourceRef[]): number {
+  const uniqueSources = new Set<string>();
+  for (const source of sources) {
+    uniqueSources.add(source.url);
+  }
+  const uniqueCount = uniqueSources.size;
+  if (uniqueCount === 0) return 1;
+  // Una sola fuente puede ser probable, pero nunca corroborada.
+  if (uniqueCount === 1) return 52;
+  return 80;
+}
+
+function buildConnectionSummaryPrompt(input: {
+  name: string;
+  details?: string;
+  who: string;
+  claims: readonly IdentityClaim[];
+}): string {
+  const lines = [
+    `Nombre consultado: ${input.name}`,
+    input.details ? `Descripción del periodista, no es evidencia: ${input.details}` : "Sin descripción adicional.",
+    `Contexto del sujeto: ${input.who || "Sin contexto."}`,
+    "Afirmaciones acumuladas:",
+  ];
+  const accumulated = input.claims.filter((claim) => claim.id !== "root");
+  if (accumulated.length === 0) lines.push("Ninguna todavía.");
+  for (const claim of accumulated) lines.push(`- [${claim.id}] ${claim.text}`);
+  lines.push("", "Devuelve solo el JSON con findings.");
+  return lines.join("\n");
+}
+
+function buildConnectionSummary(input: {
+  name: string;
+  details?: string;
+  who: string;
+  claims: readonly IdentityClaim[];
+}): IdentitySummary {
+  const probableClaims = input.claims.filter((claim) =>
+    claim.confidence === "probable" || claim.confidence === "corroborated"
+  );
+
+  const findings = probableClaims.length > 0
+    ? probableClaims
+        .map((claim) => `Se encontró que ${claim.text}.`)
+        .join("\n")
+    : "Todavía no hay afirmaciones probables.";
+
+  return {
+    who: input.who,
+    findings,
+    text: `${input.who} ${findings}`,
+    claims: probableClaims.length,
+  };
+}
+
+function buildConnectionQueriesPrompt(input: {
+  name: string;
+  details?: string;
+  who: string;
+  rootText: string;
+  claims: readonly IdentityClaim[];
+  priorQueries: readonly IdentityToolQuery[];
+  round: number;
+  branch?: {
+    entityId?: string;
+    claimId?: string;
+    label?: string;
+  };
+}): string {
+  const lines = [
+    `Nombre consultado: ${input.name}`,
+    input.details ? `Descripción del periodista, no es evidencia: ${input.details}` : "Sin descripción adicional.",
+    `Contexto del sujeto: ${input.who || "Sin contexto."}`,
+    `Afirmación raíz: ${input.rootText}`,
+    "Afirmaciones acumuladas:",
+  ];
+  const accumulated = input.claims.filter((claim) => claim.id !== "root");
+  if (accumulated.length === 0) lines.push("Ninguna todavía.");
+  for (const claim of accumulated) lines.push(`- ${claim.text}`);
+
+  const subjectLabel =
+    input.claims.find((claim) => claim.id === "root")?.entities[0]?.label ??
+    input.name;
+  const branches = connectionBranches(input.claims, subjectLabel);
+  lines.push(
+    "",
+    "Estado de la red:",
+    `- Identidades ya conectadas con el sujeto: ${
+      branches.linked.join(", ") || "ninguna todavía"
+    }.`,
+    `- Ramas abiertas (conectadas solo con otra identidad, sin vínculo probado con el sujeto): ${
+      branches.open.join(", ") || "ninguna"
+    }.`,
+  );
+  if (branches.open.length > 0) {
+    lines.push(
+      "Esta vuelta debe intentar cerrar al menos una rama abierta: busca el vínculo entre esa identidad y el sujeto (familiar, societario, laboral, contractual o político).",
+      "Si la evidencia pública no permite cerrarla, dilo en purpose y no sigas profundizando por esa rama.",
+    );
+  } else {
+    lines.push(
+      "Si una consulta conecta dos identidades entre sí, la vuelta siguiente debe intentar devolver esa cadena al sujeto.",
+    );
+  }
+
+  lines.push("", "Consultas ya usadas. No las repitas:");
+  if (input.priorQueries.length === 0) lines.push("Ninguna todavía.");
+  for (const query of input.priorQueries) {
+    lines.push(`- ${query.tool ?? "*"}: ${query.query}`);
+  }
+  const branch = input.branch?.label ?? input.branch?.entityId ?? input.branch?.claimId;
+  if (branch) {
+    lines.push(
+      "",
+      `Rama elegida por el periodista: ${branch}.`,
+      "Todas las consultas de esta vuelta deben seguir esa rama: la entidad o la afirmación indicada, no el sujeto en general.",
+      "Antes de ampliarla, intenta cerrarla contra el sujeto: busca el vínculo directo entre esa identidad y el sujeto.",
+    );
+  }
+  lines.push(
+    "",
+    `Ronda ${input.round} de ${MAX_ROUNDS}.`,
+    "Propón de 3 a 5 búsquedas nuevas que sigan una conexión concreta de las afirmaciones o del contexto.",
+    "Devuelve solo el JSON con queries.",
+  );
+  return lines.join("\n");
+}
+
+function buildConnectionEntitiesPrompt(input: {
+  name: string;
+  items: readonly IdentitySearchItem[];
+}): string {
+  const lines = [
+    `Sujeto consultado: ${input.name}`,
+    "",
+    "Resultados de esta vuelta. Elige solo entidades nombradas aquí:",
+  ];
+  input.items.forEach((item, index) => {
+    lines.push(`${index + 1}. source: ${item.source}`);
+    lines.push(`   title: ${item.title.slice(0, 200)}`);
+    if (item.snippet) lines.push(`   snippet: ${item.snippet.slice(0, 280)}`);
+  });
+  lines.push(
+    "",
+    "Devuelve las personas y las organizaciones que aparecen nombradas en estos resultados y que no son el sujeto.",
+    "Formato exacto:",
+    '{"entities":[{"id":"e1","label":"Nombre completo","type":"person","description":"Quién es en una frase","indexes":[1,3]}]}',
+    'type solo puede ser "person" o "enterprise".',
+    "indexes son los números de las fuentes de esta vuelta donde aparece la entidad. Usa [] si no la encuentras en ninguna.",
+    'Si no hay entidades distintas al sujeto, devuelve {"entities":[]}.',
+  );
+  return lines.join("\n");
+}
+
+function buildConnectionClaimsPrompt(input: {
+  name: string;
+  details?: string;
+  who: string;
+  rootText: string;
+  claims: readonly IdentityClaim[];
+  entities: readonly IdentityEntity[];
+  items: readonly IdentitySearchItem[];
+}): string {
+  const lines = [
+    `Nombre consultado: ${input.name}`,
+    input.details ? `Descripción del periodista, no es evidencia: ${input.details}` : "Sin descripción adicional.",
+    `Contexto del sujeto: ${input.who || "Sin contexto."}`,
+    `Afirmación raíz: ${input.rootText}`,
+    "Afirmaciones acumuladas:",
+  ];
+  const accumulated = input.claims.filter((claim) => claim.id !== "root");
+  if (accumulated.length === 0) lines.push("Ninguna todavía.");
+  for (const claim of accumulated) lines.push(`- [${claim.id}] ${claim.text}`);
+
+  const subjectLabel =
+    input.claims.find((claim) => claim.id === "root")?.entities[0]?.label ??
+    input.name;
+  const branches = connectionBranches(input.claims, subjectLabel);
+  lines.push(
+    "",
+    "Estado de la red:",
+    `- Identidades conectadas con el sujeto: ${
+      branches.linked.join(", ") || "ninguna todavía"
+    }.`,
+    `- Ramas abiertas: ${branches.open.join(", ") || "ninguna"}.`,
+    "Redacta cada afirmación con su origen y su destino. Si la fuente une A con B, escribe la relación entre A y B.",
+    "Si además la fuente une B con el sujeto, escríbelo en otra afirmación que nombre al sujeto y la relación.",
+    "Si la fuente solo conecta dos identidades entre sí, no atribuyas esa relación al sujeto: la rama queda abierta.",
+    "Si la evidencia de esta vuelta cierra una rama abierta contra el sujeto, esa afirmación es la más importante: redáctala nombrando al sujeto.",
+  );
+
+  lines.push("", "Entidades identificadas en esta vuelta:");
+  if (input.entities.length === 0) lines.push("Ninguna.");
+  for (const entity of input.entities) {
+    lines.push(`- ${entity.label} (${entity.type}): ${entity.description}`);
+  }
+  lines.push("", "Fuentes numeradas de esta vuelta. Cita solo estos números:");
+  input.items.forEach((item, index) => {
+    lines.push(`${index + 1}. source: ${item.source}`);
+    lines.push(`   title: ${item.title.slice(0, 200)}`);
+    if (item.snippet) lines.push(`   snippet: ${item.snippet.slice(0, 280)}`);
+  });
+  lines.push("", "Devuelve solo el JSON con claims.");
+  return lines.join("\n");
+}
+
+const CONNECTION_PLAN_SYSTEM = [
+  "Eres el planificador de conexiones de Consta. Respondes únicamente con un objeto JSON. No uses markdown.",
+  "Solo puedes afirmar lo que esté escrito en las afirmaciones acumuladas o en el contexto del sujeto.",
+  "El nombre y la descripción son la consulta del periodista, no evidencia.",
+  "No inventes ni completes datos. Si no hay pistas públicas para seguir, action es \"stop\" y nextQueries es [].",
+  "Diccionario de herramientas. Usa solo estas. No inventes una tercera:",
+  IDENTITY_TOOLS_JSON,
+  "Propón de 3 a 5 consultas que sigan una conexión concreta de las afirmaciones o del contexto.",
+  "Trabaja en dos frentes. Primero, cierra las ramas abiertas: toda identidad que solo aparece conectada con otra identidad debe tener una consulta que busque su vínculo con el sujeto (familiar, societario, laboral, contractual o político).",
+  "Segundo, amplía la red: busca vínculos entre las identidades ya conectadas y personas u organizaciones nuevas.",
+  "Una relación entre dos identidades no es una relación con el sujeto. Si la fuente no une la última conexión con el sujeto, la rama queda abierta.",
+  "Si una rama abierta no tiene evidencia pública que la una al sujeto, dilo en purpose y no sigas profundizando por ella.",
+  "Cada nextQuery lleva \"query\", \"purpose\" y \"tool\": \"wikidata\" o \"tavily\". purpose describe la conexión o afirmación a explorar, no un campo de perfil.",
+  "Si falta tool, la consulta se busca en ambas. Si tool no es válido, la consulta se busca en ambas.",
+  "Si no hay afirmaciones nuevas, action es \"stop\" y nextQueries es [].",
+  "Devuelve solo el JSON con queries.",
+].join("\n");
+
+const CONNECTION_ENTITY_SYSTEM = [
+  "Eres el identificador de entidades de Consta. Respondes únicamente con un objeto JSON. No uses markdown.",
+  "Solo puedes afirmar lo que esté escrito en los resultados de la búsqueda.",
+  "El nombre consultado es el sujeto de la investigación. No lo incluyas en entities.",
+  "Incluye personas y organizaciones que la afirmación necesite para conectar al sujeto con alguien más: familiares, socios, funcionarios, empresas, ministerios.",
+  "Incluye también las entidades que aparecen conectadas con otra entidad ya conocida, aunque la fuente no las una al sujeto.",
+  "Cada entidad lleva id, label, type, description e indexes. type es person o enterprise; indexes cita los números de las fuentes.",
+  'Devuelve solo el JSON con entities: {"entities":[...]}. Si no hay entidades distintas al sujeto, entities es [].',
+].join("\n");
+
+const CONNECTION_CLAIM_SYSTEM = [
+  "Eres el razonador de conexiones de Consta. Respondes únicamente con un objeto JSON. No uses markdown.",
+  "Solo puedes afirmar lo que esté escrito en las fuentes numeradas de esta vuelta.",
+  "El nombre y la descripción son la consulta del periodista, no evidencia.",
+  "No inventes ni completes datos. Si no hay afirmaciones nuevas, claims es [].",
+  "Cada claim lleva \"text\", \"parentText\" e \"indexes\": una lista de números de las fuentes numeradas de esta vuelta.",
+  "El texto debe nombrar a las personas y organizaciones de la fuente y la relación cuando la fuente la diga: hermano, socia, ministro, representante legal, empleado.",
+  "Cada claim debe dejar claro el origen y el destino de la relación. No atribuyas al sujeto una relación que la fuente solo afirma entre otras dos personas.",
+  "Si la fuente une dos identidades entre sí y no con el sujeto, escríbelo así: la cadena queda abierta.",
+  "Si la fuente cierra esa cadena con el sujeto, redacta otra afirmación que nombre al sujeto y la relación; esa es la conexión que se busca.",
+  "Si no hay fuentes, claims es [].",
+  "Devuelve solo el JSON con claims.",
+].join("\n");
+
+const CONNECTION_SUMMARY_SYSTEM = [
+  "Eres el resumidor de conexiones de Consta. Respondes únicamente con un objeto JSON. No uses markdown.",
+  "Solo puedes afirmar lo que esté escrito en las afirmaciones acumuladas.",
+  "El nombre y la descripción son la consulta del periodista, no evidencia.",
+  "Distingue las conexiones directas con el sujeto de las cadenas entre identidades. Si una cadena no cierra en el sujeto, dilo sin presentarla como conexión del sujeto.",
+  "Devuelve solo el JSON con findings: una lista de frases en texto plano, no de objetos.",
+].join("\n");
+
+const CONNECTION_PLAN_MAX_TOKENS = 4_500;
+const CONNECTION_ENTITY_MAX_TOKENS = 2_000;
+const CONNECTION_CLAIM_MAX_TOKENS = 4_500;
+const CONNECTION_SUMMARY_MAX_TOKENS = 2_000;
+
+const CONNECTION_ROUNDS = 3;
+
+async function runConnectionRound(
+  env: GeneralEnv,
+  input: {
+    name: string;
+    details?: string;
+    candidate: IdentityCandidate;
+    state: IdentityConnectionState;
+    subject: IdentityEntity;
+    who: string;
+    branchContext?: {
+      entityId?: string;
+      claimId?: string;
+      label?: string;
+    };
+  },
+): Promise<IdentityConnectionsResponse> {
+  const { state, candidate, name, details, who, branchContext } = input;
+  const round = state.rounds.length + 1;
+  const rootText =
+    state.claims.find((claim) => claim.id === "root")?.text ??
+    `El sujeto investigado es ${candidateLabel(candidate, name)}.`;
+
+  const priorKeys = new Set<string>();
+  const priorQueries: IdentityToolQuery[] = [];
+  for (const previous of state.rounds) {
+    for (const query of previous.queries) {
+      const key = queryKey(query.query, query.tool);
+      if (priorKeys.has(key)) continue;
+      priorKeys.add(key);
+      priorQueries.push(query);
+    }
+  }
+
+  const planCall = await callOpenRouter(
+    env,
+    [
+      { role: "system", content: CONNECTION_PLAN_SYSTEM },
+      {
+        role: "user",
+        content: buildConnectionQueriesPrompt({
+          name,
+          details,
+          who,
+          rootText,
+          claims: state.claims,
+          priorQueries,
+          round,
+          branch: branchContext,
+        }),
+      },
+    ],
+    modelCallOptions(env, CONNECTION_PLAN_MAX_TOKENS),
+  );
+
+  if (!planCall.ok) {
+    logModelFailure(`conexiones plan ${round}`, planCall.attempts, planCall.error?.code);
+    return {
+      ...state,
+      canContinue: false,
+      stoppedReason: "El plan de conexiones no pudo consultar al modelo.",
+      error: fromGeneralError(
+        planCall.error,
+        "No se pudo planificar la vuelta de conexiones.",
+      ),
+    };
+  }
+
+  const planJson = await parseModelJson(env, planCall.text, CONNECTION_PLAN_MAX_TOKENS);
+  if (!planJson.ok) {
+    return {
+      ...state,
+      canContinue: false,
+      stoppedReason: "El plan de conexiones no llegó en JSON válido.",
+      error: fromGeneralError(
+        planJson.error,
+        "El plan de conexiones no llegó en JSON válido.",
+      ),
+    };
+  }
+
+  const queries = readConnectionQueries(planJson.value, priorKeys);
+  if (queries.length === 0) {
+    return { ...state, canContinue: false, stoppedReason: "sin búsquedas nuevas" };
+  }
+
+  const searches = await Promise.all(
+    queries.map((query) => searchIdentityQuery(env, query)),
+  );
+  const catalog = new Map<string, IdentitySearchItem>();
+  for (const search of searches) addToCatalog(catalog, search.items);
+  const items = [...catalog.values()];
+
+  if (items.length === 0) {
+    // Un timeout de Tavily o Wikidata no significa que el sujeto no tenga
+    // conexiones. Si hubo error de red, se permite otra vuelta; si las
+    // búsquedas respondieron vacías, el loop se detiene.
+    const hadErrors = searches.some((search) => search.errors.length > 0);
+    const canRetry = hadErrors && round < CONNECTION_ROUNDS;
+    const reason = hadErrors
+      ? "Las búsquedas fallaron o agotaron el tiempo de espera."
+      : "sin resultados";
+    return {
+      ...state,
+      rounds: [
+        ...state.rounds,
+        {
+          round,
+          queries,
+          searches,
+          entities: [],
+          claims: [],
+          reason,
+          stopped: !canRetry,
+        },
+      ],
+      canContinue: canRetry,
+      stoppedReason: reason,
+    };
+  }
+
+  const entityCall = await callOpenRouter(
+    env,
+    [
+      { role: "system", content: CONNECTION_ENTITY_SYSTEM },
+      {
+        role: "user",
+        content: buildConnectionEntitiesPrompt({
+          name,
+          items,
+        }),
+      },
+    ],
+    modelCallOptions(env, CONNECTION_ENTITY_MAX_TOKENS),
+  );
+
+  if (!entityCall.ok) {
+    logModelFailure(`conexiones entidades ${round}`, entityCall.attempts, entityCall.error?.code);
+    return {
+      ...state,
+      rounds: [
+        ...state.rounds,
+        {
+          round,
+          queries,
+          searches,
+          entities: [],
+          claims: [],
+          reason: "El minipaso de identificación no pudo consultar al modelo.",
+          stopped: true,
+        },
+      ],
+      canContinue: false,
+      stoppedReason: "El minipaso de identificación no pudo completarse.",
+    };
+  }
+
+  const entityJson = await parseModelJson(env, entityCall.text, CONNECTION_ENTITY_MAX_TOKENS);
+  if (!entityJson.ok) {
+    return {
+      ...state,
+      rounds: [
+        ...state.rounds,
+        {
+          round,
+          queries,
+          searches,
+          entities: [],
+          claims: [],
+          reason: "El minipaso de identificación no llegó en JSON válido.",
+          stopped: true,
+        },
+      ],
+      canContinue: false,
+      stoppedReason: "El minipaso de identificación no llegó en JSON válido.",
+    };
+  }
+
+  const resolvedEntities = readConnectionEntities(entityJson.value, items);
+  if (!resolvedEntities) {
+    return {
+      ...state,
+      rounds: [
+        ...state.rounds,
+        {
+          round,
+          queries,
+          searches,
+          entities: [],
+          claims: [],
+          reason: "No se identificaron entidades nuevas.",
+          stopped: true,
+        },
+      ],
+      canContinue: false,
+      stoppedReason: "No se identificaron entidades nuevas.",
+    };
+  }
+
+  // Reutiliza el motor de identidad para que cada tarjeta tenga la ficha
+  // completa; la IA elige el candidato, no el periodista. El sujeto queda
+  // fuera porque su ficha ya está confirmada en el panel. Las fichas
+  // pendientes de vueltas anteriores se completan aquí.
+  const profiled = await attachEntityProfiles(
+    env,
+    resolvedEntities,
+    state.claims,
+    input.subject.label,
+  );
+  const entities = profiled.entities;
+  const priorClaims = profiled.claims;
+
+  const claimCall = await callOpenRouter(
+    env,
+    [
+      { role: "system", content: CONNECTION_CLAIM_SYSTEM },
+      {
+        role: "user",
+        content: buildConnectionClaimsPrompt({
+          name,
+          details,
+          who,
+          rootText,
+          claims: priorClaims,
+          entities,
+          items,
+        }),
+      },
+    ],
+    modelCallOptions(env, CONNECTION_CLAIM_MAX_TOKENS),
+  );
+
+  if (!claimCall.ok) {
+    logModelFailure(`conexiones claims ${round}`, claimCall.attempts, claimCall.error?.code);
+    return {
+      ...state,
+      rounds: [
+        ...state.rounds,
+        {
+          round,
+          queries,
+          searches,
+          entities,
+          claims: [],
+          reason: "El razonamiento no pudo consultar al modelo.",
+          stopped: true,
+        },
+      ],
+      canContinue: false,
+      stoppedReason: "El razonamiento no pudo completarse.",
+    };
+  }
+
+  const claimJson = await parseModelJson(env, claimCall.text, CONNECTION_CLAIM_MAX_TOKENS);
+  if (!claimJson.ok) {
+    return {
+      ...state,
+      rounds: [
+        ...state.rounds,
+        {
+          round,
+          queries,
+          searches,
+          entities,
+          claims: [],
+          reason: "El razonamiento no llegó en JSON válido.",
+          stopped: true,
+        },
+      ],
+      canContinue: false,
+      stoppedReason: "El razonamiento no llegó en JSON válido.",
+    };
+  }
+
+  const claims = buildConnectionClaims(claimJson.value, items, entities, round, state.claims);
+  if (!claims) {
+    return {
+      ...state,
+      rounds: [
+        ...state.rounds,
+        {
+          round,
+          queries,
+          searches,
+          entities,
+          claims: [],
+          reason: "No se encontraron afirmaciones nuevas.",
+          stopped: true,
+        },
+      ],
+      canContinue: false,
+      stoppedReason: "No se encontraron afirmaciones nuevas.",
+    };
+  }
+
+  const summaryCall = await callOpenRouter(
+    env,
+    [
+      { role: "system", content: CONNECTION_SUMMARY_SYSTEM },
+      {
+        role: "user",
+        content: buildConnectionSummaryPrompt({
+          name,
+          details,
+          who,
+          claims: [...priorClaims, ...claims],
+        }),
+      },
+    ],
+    modelCallOptions(env, CONNECTION_SUMMARY_MAX_TOKENS),
+  );
+
+  if (!summaryCall.ok) {
+    logModelFailure(`conexiones summary ${round}`, summaryCall.attempts, summaryCall.error?.code);
+    return {
+      ...state,
+      rounds: [
+        ...state.rounds,
+        {
+          round,
+          queries,
+          searches,
+          entities,
+          claims,
+          reason: "El resumen no pudo consultar al modelo.",
+          stopped: true,
+        },
+      ],
+      canContinue: false,
+      stoppedReason: "El resumen no pudo completarse.",
+    };
+  }
+
+  const summaryJson = await parseModelJson(env, summaryCall.text, CONNECTION_SUMMARY_MAX_TOKENS);
+  if (!summaryJson.ok) {
+    return {
+      ...state,
+      rounds: [
+        ...state.rounds,
+        {
+          round,
+          queries,
+          searches,
+          entities,
+          claims,
+          reason: "El resumen no llegó en JSON válido.",
+          stopped: true,
+        },
+      ],
+      canContinue: false,
+      stoppedReason: "El resumen no llegó en JSON válido.",
+    };
+  }
+
+  const summary = readConnectionRoundSummary(summaryJson.value);
+  if (!summary) {
+    return {
+      ...state,
+      rounds: [
+        ...state.rounds,
+        {
+          round,
+          queries,
+          searches,
+          entities,
+          claims,
+          reason: "No se pudo leer el resumen.",
+          stopped: true,
+        },
+      ],
+      canContinue: false,
+      stoppedReason: "No se pudo leer el resumen.",
+    };
+  }
+
+  const newClaims = claims.filter(
+    (claim) =>
+      !priorClaims.some(
+        (existing) =>
+          normalizeClaimText(existing.text) === normalizeClaimText(claim.text),
+      ),
+  );
+
+  const whoText = summary.who || state.summary.who;
+  const newState = {
+    ...state,
+    claims: [...priorClaims, ...newClaims],
+    rounds: [
+      ...state.rounds,
+      {
+        round,
+        queries,
+        searches,
+        entities,
+        claims: newClaims,
+        reason: summary.findings,
+        stopped: round >= CONNECTION_ROUNDS,
+      },
+    ],
+    summary: {
+      who: whoText,
+      findings: summary.findings,
+      text: `${whoText} ${summary.findings}`.trim(),
+      claims: [...priorClaims, ...newClaims].filter(
+        (claim) => claim.confidence !== "uncertain",
+      ).length,
+    },
+    canContinue: newClaims.length > 0 && round < CONNECTION_ROUNDS,
+    stoppedReason: newClaims.length === 0 ? "sin afirmaciones nuevas" : null,
+  };
+
+  return newState;
+}
+
+function readConnectionQueries(value: unknown, priorKeys: Set<string>): IdentityToolQuery[] {
+  const list = readListPayload(value, "queries") ?? readListPayload(value, "nextQueries");
+  if (!list) return [];
+  const queries: IdentityToolQuery[] = [];
+  for (const entry of list) {
+    const directed = readDirectedQuery(entry);
+    if (!directed) continue;
+    const key = queryKey(directed.query, directed.tool);
+    if (priorKeys.has(key)) continue;
+    if (queries.some((existing) => queryKey(existing.query, existing.tool) === key)) continue;
+    queries.push(directed);
+    if (queries.length === MAX_PLAN_QUERIES) break;
+  }
+  return queries;
+}
+
+export async function investigateIdentityConnections(
+  env: GeneralEnv,
+  request: IdentityConnectionsRequest,
+): Promise<IdentityConnectionsResponse> {
+  const name = request.name.trim();
+  const details = request.details?.trim() || undefined;
+  const candidates = Array.isArray(request.investigation?.candidates)
+    ? request.investigation.candidates
+    : [];
+  const foundCandidate = candidates.find(
+    (item) => isRecord(item) && item.id === request.candidateId,
+  );
+  const candidate =
+    foundCandidate && isRecord(foundCandidate)
+      ? (foundCandidate as unknown as IdentityCandidate)
+      : null;
+
+  if (!candidate) {
+    return {
+      ...emptyConnectionState(),
+      stoppedReason: "No se encontró el candidato en la investigación.",
+      error: {
+        code: "candidate_not_found",
+        message: `No existe el candidato "${request.candidateId}" en la investigación.`,
+      },
+    };
+  }
+
+  const who = clip(connectionWho(candidate, name), 400) ?? candidateLabel(candidate, name);
+  const existing = request.connection;
+  let state: IdentityConnectionState;
+
+  if (existing && isRecord(existing)) {
+    const claims = Array.isArray(existing.claims) ? existing.claims : [];
+    const rounds = Array.isArray(existing.rounds) ? existing.rounds : [];
+    let root = claims.find((claim) => claim.id === "root");
+    if (!root) {
+      root = buildRootClaim(name, candidate);
+      claims.unshift(root);
+    }
+    state = {
+      claims,
+      rounds,
+      summary: resolveConnectionSummary(existing.summary, {
+        who,
+        findings: "Todavía no hay afirmaciones probables.",
+        text: `${who} Todavía no hay afirmaciones probables.`,
+        claims: 0,
+      }),
+      canContinue:
+        typeof existing.canContinue === "boolean" ? existing.canContinue : true,
+      stoppedReason:
+        typeof existing.stoppedReason === "string" ? existing.stoppedReason : null,
+    };
+  } else {
+    const root = buildRootClaim(name, candidate);
+    const subject = buildSubjectEntity(name, candidate, root);
+    root.entities = [subject];
+    const findings = "Todavía no hay afirmaciones probables.";
+    state = {
+      claims: [root],
+      rounds: [],
+      summary: { who, findings, text: `${who} ${findings}`, claims: 0 },
+      canContinue: true,
+      stoppedReason: null,
+    };
+  }
+
+  // Una rama elegida por el periodista abre una vuelta más aunque el loop
+  // acumulado ya se hubiera detenido.
+  const branch = request.branchContext
+    ? {
+        entityId: request.branchContext.entityId?.trim() || undefined,
+        claimId: request.branchContext.claimId?.trim() || undefined,
+        label: request.branchContext.label?.trim() || undefined,
+      }
+    : undefined;
+  const hasBranch = Boolean(branch?.entityId || branch?.claimId || branch?.label);
+  if (existing && !hasBranch && (!state.canContinue || state.rounds.length >= CONNECTION_ROUNDS)) {
+    return state;
+  }
+
+  const rootClaim = state.claims.find((claim) => claim.id === "root");
+  const subject =
+    rootClaim?.entities?.find((entity) => entity.id === candidate.id) ??
+    (rootClaim ? buildSubjectEntity(name, candidate, rootClaim) : buildSubjectEntity(name, candidate, buildRootClaim(name, candidate)));
+
+  try {
+    return await runConnectionRound(env, {
+      name,
+      details,
+      candidate,
+      state,
+      subject,
+      who,
+      branchContext: hasBranch ? branch : undefined,
+    });
+  } catch (error) {
+    console.error(
+      "[consta-api] identity connections",
+      error instanceof Error ? error.message : "unknown",
+    );
+    return {
+      ...state,
+      canContinue: false,
+      stoppedReason: "La vuelta de conexiones no pudo completarse.",
+      error: {
+        code: "internal_error",
+        message: "La vuelta de conexiones no pudo completarse.",
+      },
+    };
   }
 }

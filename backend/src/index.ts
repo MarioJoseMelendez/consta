@@ -9,6 +9,7 @@ import type {
   ApiError,
   EntityBundle,
   Evidence,
+  IdentityConnectionState,
   IdentityInvestigation,
   Relationship,
   SearchResponse,
@@ -21,6 +22,7 @@ import {
   IDENTITY_DETAILS_MAX,
   IDENTITY_NAME_MAX,
   investigateIdentity,
+  investigateIdentityConnections,
   requestExtraIdentitySearch,
 } from "./identity";
 
@@ -40,6 +42,9 @@ interface Bindings {
   OPENROUTER_MODELS?: string;
   OPENROUTER_SITE_URL?: string;
   OPENROUTER_APP_NAME?: string;
+  NVIDIA_API_KEY?: string;
+  NVIDIA_BASE_URL?: string;
+  NVIDIA_MODEL?: string;
 }
 
 type AppContext = Context<{ Bindings: Bindings }>;
@@ -133,7 +138,7 @@ function readId(raw: string | undefined, param: string): ParamResult {
       ok: false,
       response: apiError(
         "invalid_parameter",
-        `El parámetro "${param}" no puede superar ${MAX_ID_LENGTH} caracteres.`,
+        `El parámetro "${param}" no puede superar ${MAX_ID_LENGTH} caracteres.`
       ),
     };
   }
@@ -149,7 +154,7 @@ function readEvidenceIds(raw: string | undefined): EvidenceIdsResult {
   if (ids.length === 0) {
     return {
       ok: false,
-      response: apiError("invalid_parameter", 'El parámetro "ids" debe incluir al menos un ID.'),
+      response: apiError("invalid_parameter", 'El parámetro "ids" debe incluir al menos un ID.')
     };
   }
   if (ids.length > MAX_EVIDENCE_IDS) {
@@ -157,8 +162,8 @@ function readEvidenceIds(raw: string | undefined): EvidenceIdsResult {
       ok: false,
       response: apiError(
         "invalid_parameter",
-        `El parámetro "ids" admite hasta ${MAX_EVIDENCE_IDS} IDs por consulta.`,
-      ),
+        `El parámetro "ids" admite hasta ${MAX_EVIDENCE_IDS} IDs por consulta.`
+      )
     };
   }
   if (ids.some((id) => id.length > MAX_ID_LENGTH)) {
@@ -166,8 +171,8 @@ function readEvidenceIds(raw: string | undefined): EvidenceIdsResult {
       ok: false,
       response: apiError(
         "invalid_parameter",
-        `Cada ID de "ids" puede tener hasta ${MAX_ID_LENGTH} caracteres.`,
-      ),
+        `Cada ID de "ids" puede tener hasta ${MAX_ID_LENGTH} caracteres.`
+      )
     };
   }
   return { ok: true, value: ids };
@@ -219,7 +224,7 @@ app.get("/", (c) =>
     service: SERVICE_NAME,
     version: SERVICE_VERSION,
     description:
-      "API de Consta para investigación de registros públicos. Las rutas de entidades y análisis están en modo demo. POST /identity/investigate consulta fuentes públicas y no envía X-Consta-Demo.",
+      "API de Consta para investigación de registros públicos. Las rutas de entidades y análisis están en modo demo. POST /identity/investigate, /identity/more y /identity/connections consultan fuentes públicas y no envían X-Consta-Demo.",
     demo: true,
     links: {
       manifest: "/manifest",
@@ -238,6 +243,7 @@ app.get("/", (c) =>
       "POST /analyze",
       "POST /identity/investigate",
       "POST /identity/more",
+      "POST /identity/connections",
     ],
   }),
 );
@@ -275,7 +281,7 @@ async function handleSearch(c: AppContext) {
     return c.json(
       apiError(
         "invalid_parameter",
-        `El parámetro "q" no puede superar ${MAX_QUERY_LENGTH} caracteres.`,
+        `El parámetro "q" no puede superar ${MAX_QUERY_LENGTH} caracteres.`
       ),
       400,
     );
@@ -283,10 +289,7 @@ async function handleSearch(c: AppContext) {
 
   const baseUrl = gtBaseUrl(c.env);
   if (baseUrl) {
-    const remote = await gtGet<SearchResponse>(
-      baseUrl,
-      `/tools/search_entities?q=${encodeURIComponent(query)}&limit=100`,
-    );
+    const remote = await gtGet<SearchResponse>(baseUrl, `/tools/search_entities?q=${encodeURIComponent(query)}&limit=100`);
     if (remote) {
       c.header("X-Consta-Channel", "gt");
       return c.json(remote);
@@ -312,10 +315,7 @@ async function handleGetEntity(c: AppContext, rawId: string | undefined) {
 
   const baseUrl = gtBaseUrl(c.env);
   if (baseUrl) {
-    const remote = await gtGet<EntityBundle>(
-      baseUrl,
-      `/tools/get_entity?id=${encodeURIComponent(idResult.value)}`,
-    );
+    const remote = await gtGet<EntityBundle>(baseUrl, `/tools/get_entity?id=${encodeURIComponent(idResult.value)}`);
     if (remote) {
       c.header("X-Consta-Channel", "gt");
       return c.json(remote);
@@ -346,10 +346,7 @@ app.get("/tools/get_relationships", async (c) => {
 
   const baseUrl = gtBaseUrl(c.env);
   if (baseUrl) {
-    const remote = await gtGet<RelationshipsResponse>(
-      baseUrl,
-      `/tools/get_relationships?id=${encodeURIComponent(idResult.value)}`,
-    );
+    const remote = await gtGet<RelationshipsResponse>(baseUrl, `/tools/get_relationships?id=${encodeURIComponent(idResult.value)}`);
     if (remote) {
       c.header("X-Consta-Channel", "gt");
       return c.json(remote);
@@ -379,13 +376,8 @@ app.get("/tools/get_evidence", async (c) => {
 
   const baseUrl = gtBaseUrl(c.env);
   if (baseUrl) {
-    const query = idsResult.value
-      ? `?ids=${encodeURIComponent(idsResult.value.join(","))}`
-      : "";
-    const remote = await gtGet<{ items: Evidence[] }>(
-      baseUrl,
-      `/tools/get_evidence${query}`,
-    );
+    const query = idsResult.value ? `?ids=${encodeURIComponent(idsResult.value.join(","))}` : "";
+    const remote = await gtGet<{ items: Evidence[] }>(baseUrl, `/tools/get_evidence${query}`);
     if (remote) {
       c.header("X-Consta-Channel", "gt");
       return c.json(remote);
@@ -402,10 +394,7 @@ app.get("/tools/get_document", async (c) => {
 
   const baseUrl = gtBaseUrl(c.env);
   if (baseUrl) {
-    const remote = await gtGet<DocumentResponse>(
-      baseUrl,
-      `/tools/get_document?id=${encodeURIComponent(idResult.value)}`,
-    );
+    const remote = await gtGet<DocumentResponse>(baseUrl, `/tools/get_document?id=${encodeURIComponent(idResult.value)}`);
     if (remote) {
       c.header("X-Consta-Channel", "gt");
       return c.json(remote);
@@ -478,20 +467,13 @@ app.post("/analyze", async (c) => {
 
   if (!targetId && query) {
     if (baseUrl) {
-      const remoteSearch = await gtGet<SearchResponse>(
-        baseUrl,
-        `/tools/search_entities?q=${encodeURIComponent(query)}&limit=100`,
-      );
-      const remoteFirst = remoteSearch?.items.find(
-        (item) => item.kind === "entity" && item.sourceId,
-      );
+      const remoteSearch = await gtGet<SearchResponse>(baseUrl, `/tools/search_entities?q=${encodeURIComponent(query)}&limit=100`);
+      const remoteFirst = remoteSearch?.items.find((item) => item.kind === "entity" && item.sourceId);
       targetId = remoteFirst?.sourceId;
     }
 
     if (!targetId) {
-      const first = searchDemoEntities(query).items.find(
-        (item) => item.kind === "entity" && item.sourceId,
-      );
+      const first = searchDemoEntities(query).items.find((item) => item.kind === "entity" && item.sourceId);
       targetId = first?.sourceId;
     }
   }
@@ -504,10 +486,7 @@ app.post("/analyze", async (c) => {
   }
 
   if (baseUrl) {
-    const remoteBundle = await gtGet<EntityBundle>(
-      baseUrl,
-      `/tools/get_entity?id=${encodeURIComponent(targetId)}`,
-    );
+    const remoteBundle = await gtGet<EntityBundle>(baseUrl, `/tools/get_entity?id=${encodeURIComponent(targetId)}`);
     if (remoteBundle) {
       c.header("X-Consta-Channel", "gt");
       return c.json(buildAnalysisRun(remoteBundle));
@@ -560,7 +539,7 @@ app.post("/identity/investigate", async (c) => {
     return c.json(
       apiError(
         "invalid_parameter",
-        `"details" no puede superar ${IDENTITY_DETAILS_MAX} caracteres.`,
+        `"details" no puede superar ${IDENTITY_DETAILS_MAX} caracteres.`
       ),
       400,
     );
@@ -625,7 +604,7 @@ app.post("/identity/more", async (c) => {
     return c.json(
       apiError(
         "invalid_parameter",
-        `"details" no puede superar ${IDENTITY_DETAILS_MAX} caracteres.`,
+        `"details" no puede superar ${IDENTITY_DETAILS_MAX} caracteres.`
       ),
       400,
     );
@@ -643,11 +622,128 @@ app.post("/identity/more", async (c) => {
   return c.json(result, result.error ? 502 : 200);
 });
 
+app.post("/identity/connections", async (c) => {
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(apiError("invalid_json", "El cuerpo de la solicitud debe ser JSON válido."), 400);
+  }
+
+  if (!isRecord(body)) {
+    return c.json(apiError("invalid_body", "El cuerpo debe ser un objeto JSON."), 400);
+  }
+  if (typeof body.name !== "string") {
+    return c.json(apiError("missing_parameter", 'Se requiere "name".'), 400);
+  }
+  if (body.details !== undefined && typeof body.details !== "string") {
+    return c.json(apiError("invalid_parameter", '"details" debe ser una cadena.'), 400);
+  }
+  if (typeof body.candidateId !== "string" || !body.candidateId.trim()) {
+    return c.json(apiError("missing_parameter", 'Se requiere "candidateId".'), 400);
+  }
+
+  const investigation = body.investigation;
+  if (
+    !isRecord(investigation) ||
+    !isRecord(investigation.plan) ||
+    !Array.isArray(investigation.rounds) ||
+    !Array.isArray(investigation.candidates)
+  ) {
+    return c.json(
+      apiError(
+        "invalid_parameter",
+        'Se requiere la investigación actual en "investigation".'
+      ),
+      400,
+    );
+  }
+
+  const connection = body.connection;
+  if (
+    connection !== undefined &&
+    (!isRecord(connection) ||
+      !Array.isArray(connection.claims) ||
+      !Array.isArray(connection.rounds) ||
+      !isRecord(connection.summary) ||
+      typeof connection.canContinue !== "boolean" ||
+      (connection.stoppedReason !== null &&
+        typeof connection.stoppedReason !== "string"))
+  ) {
+    return c.json(
+      apiError(
+        "invalid_parameter",
+        '"connection" debe traer claims y rounds como listas, summary como objeto, canContinue booleano y stoppedReason de texto o null.'
+      ),
+      400
+    );
+  }
+
+  const branchContext = body.branchContext;
+  if (branchContext !== undefined && !isRecord(branchContext)) {
+    return c.json(apiError("invalid_parameter", '"branchContext" debe ser un objeto válido.'), 400);
+  }
+  if (branchContext && (
+    (branchContext.entityId !== undefined && typeof branchContext.entityId !== "string") ||
+    (branchContext.claimId !== undefined && typeof branchContext.claimId !== "string") ||
+    (branchContext.label !== undefined && typeof branchContext.label !== "string")
+  )) {
+    return c.json(apiError("invalid_parameter", '"branchContext" debe contener solo cadenas válidas.'), 400);
+  }
+
+  const name = body.name.trim();
+  const details = typeof body.details === "string" ? body.details.trim() : undefined;
+
+  if (!name) {
+    return c.json(apiError("missing_parameter", 'Se requiere "name".'), 400);
+  }
+  if (name.length > IDENTITY_NAME_MAX) {
+    return c.json(
+      apiError("invalid_parameter", `"name" no puede superar ${IDENTITY_NAME_MAX} caracteres.`),
+      400,
+    );
+  }
+  if (details && details.length > IDENTITY_DETAILS_MAX) {
+    return c.json(
+      apiError(
+        "invalid_parameter",
+        `"details" no puede superar ${IDENTITY_DETAILS_MAX} caracteres.`
+      ),
+      400,
+    );
+  }
+
+  const result = await investigateIdentityConnections(c.env, {
+    name,
+    details: details || undefined,
+    investigation: investigation as unknown as IdentityInvestigation,
+    candidateId: body.candidateId.trim(),
+    connection: connection as IdentityConnectionState | undefined,
+    branchContext: branchContext,
+  });
+
+  const hasWork = result.claims.length > 0 || result.rounds.length > 0;
+  if (result.error && !hasWork) {
+    const status =
+      result.error.code === "missing_parameter" ||
+      result.error.code === "invalid_parameter" ||
+      result.error.code === "candidate_not_found"
+        ? 400
+        : 502;
+    return c.json(
+      apiError(result.error.code, result.error.message, result.error.retryable),
+      status,
+    );
+  }
+
+  return c.json(result, result.error ? 502 : 200);
+});
+
 app.notFound((c) =>
   c.json(
     apiError(
       "not_found",
-      `Ruta no encontrada: ${c.req.method} ${new URL(c.req.url).pathname}.`,
+      `Ruta no encontrada: ${c.req.method} ${new URL(c.req.url).pathname}.`
     ),
     404,
   ),

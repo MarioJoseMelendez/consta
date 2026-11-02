@@ -6,7 +6,9 @@ ENVIRONMENT=demo
 
 # Orígenes adicionales permitidos por CORS, separados por coma.
 # http://localhost:3000 y los dominios *.pages.dev ya están permitidos.
+# Si el frontend corre en otro puerto, agrégalo aquí.
 # CORS_ORIGINS=https://consta.example.com
+# CORS_ORIGINS=http://localhost:3001,http://127.0.0.1:3001
 
 # Channel GT que consume el analyzer server-side.
 # Sin esta variable, el backend usa el bundle demo local.
@@ -32,3 +34,11 @@ ENVIRONMENT=demo
 # OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 # OPENROUTER_SITE_URL=https://consta.example
 # OPENROUTER_APP_NAME=Consta
+
+# NVIDIA NIM. Respaldo de callOpenRouter cuando OpenRouter no tiene cuota.
+# Habla el mismo protocolo OpenAI; la cuota es independiente de la de OpenRouter.
+# Si no defines NVIDIA_MODEL, se prueba nemotron-3.5-lightning y luego bolt.
+# La key se crea en https://build.nvidia.com/settings
+# NVIDIA_API_KEY=
+# NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
+# NVIDIA_MODEL=nvidia/nemotron-3.5-lightning-30b-a3b

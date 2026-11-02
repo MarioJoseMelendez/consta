@@ -23,6 +23,9 @@ export interface GeneralEnv {
   OPENROUTER_MODELS?: string;
   OPENROUTER_SITE_URL?: string;
   OPENROUTER_APP_NAME?: string;
+  NVIDIA_API_KEY?: string;
+  NVIDIA_BASE_URL?: string;
+  NVIDIA_MODEL?: string;
 }
 
 export interface GeneralError {
@@ -82,6 +85,8 @@ export interface OpenRouterMessage {
 }
 
 export interface OpenRouterAttempt {
+  /** Proveedor que atendió el intento. */
+  provider?: "openrouter" | "nvidia";
   model: string;
   attempt: number;
   status?: number;
@@ -99,6 +104,8 @@ export interface OpenRouterResult {
   ok: boolean;
   text: string;
   model: string | null;
+  /** Proveedor que devolvió el texto. */
+  provider?: "openrouter" | "nvidia";
   usage?: OpenRouterUsage;
   attempts: OpenRouterAttempt[];
   error?: GeneralError;
@@ -144,6 +151,39 @@ export const PREFERRED_FREE_TEXT_MODELS: readonly string[] = [
   "google/gemma-4-31b-it:free",
   "openrouter/free",
 ];
+
+/**
+ * NVIDIA NIM habla el mismo protocolo que OpenRouter y comparte su propia
+ * cuota, así que es el respaldo cuando OpenRouter agota la diaria de los
+ * modelos free. Los dos modelos aceptan `reasoning` y devuelven JSON.
+ */
+const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
+const NVIDIA_DEFAULT_MODELS: readonly string[] = [
+  "nvidia/nemotron-3.5-lightning-30b-a3b",
+  "nvidia/nemotron-3.5-bolt-e4b",
+];
+
+/**
+ * La cuota `free-models-per-day` la comparten todos los modelos `:free` de
+ * OpenRouter. Reintentar con el siguiente devuelve el mismo 429, así que la
+ * cadena se corta y pasa al proveedor de respaldo.
+ */
+function isDailyQuotaExhausted(error: GeneralError): boolean {
+  if (error.status !== 429) return false;
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("free-models-per-day") ||
+    message.includes("per-day") ||
+    message.includes("per day")
+  );
+}
+
+interface ProviderTarget {
+  provider: "openrouter" | "nvidia";
+  url: URL;
+  headers: Record<string, string>;
+  models: string[];
+}
 
 function isModelScopedUnauthorized(error: GeneralError, model: string): boolean {
   const message = error.message.toLowerCase();
@@ -811,10 +851,12 @@ export async function searchTavily(
 }
 
 /**
- * Llama a OpenRouter con fallback entre modelos free que declaran salida de
- * texto. Si un modelo no devuelve texto, se descarta y se pasa al siguiente.
+ * Llama a un modelo con fallback: primero los modelos free de OpenRouter y,
+ * si la cuota diaria o la clave fallan, NVIDIA NIM (mismo protocolo OpenAI).
+ * Si un modelo no devuelve texto, se descarta y se pasa al siguiente.
  * Solo reintenta errores transitorios (429, 5xx, timeout o red).
- * Un 401 de la clave detiene la cadena. Un 403 que nombra al modelo se salta.
+ * Un 401 de la clave detiene ese proveedor y prueba el respaldo. Un 403 que
+ * nombra al modelo se salta.
  */
 export async function callOpenRouter(
   env: GeneralEnv,
@@ -832,37 +874,6 @@ export async function callOpenRouter(
       error: {
         code: "invalid_messages",
         message: "Se requiere al menos un mensaje.",
-      },
-    };
-  }
-
-  const apiKey = env.OPENROUTER_API_KEY?.trim();
-  if (!apiKey) {
-    return {
-      ok: false,
-      text: "",
-      model: null,
-      attempts,
-      error: {
-        code: "missing_api_key",
-        message: "Falta OPENROUTER_API_KEY en el entorno del analyzer.",
-      },
-    };
-  }
-
-  const baseUrl = env.OPENROUTER_BASE_URL?.trim() || OPENROUTER_BASE_URL;
-  let url: URL;
-  try {
-    url = joinEndpoint(baseUrl, "/chat/completions");
-  } catch {
-    return {
-      ok: false,
-      text: "",
-      model: null,
-      attempts,
-      error: {
-        code: "invalid_config",
-        message: "OPENROUTER_BASE_URL no es una URL válida.",
       },
     };
   }
@@ -896,120 +907,218 @@ export async function callOpenRouter(
     32_000,
   );
 
-  const models = await resolveOpenRouterModels(env, options, timeoutMs);
-  if (models.length === 0) {
+  const providers: ProviderTarget[] = [];
+
+  const openRouterKey = env.OPENROUTER_API_KEY?.trim();
+  if (openRouterKey) {
+    const baseUrl = env.OPENROUTER_BASE_URL?.trim() || OPENROUTER_BASE_URL;
+    let url: URL;
+    try {
+      url = joinEndpoint(baseUrl, "/chat/completions");
+    } catch {
+      return {
+        ok: false,
+        text: "",
+        model: null,
+        attempts,
+        error: {
+          code: "invalid_config",
+          message: "OPENROUTER_BASE_URL no es una URL válida.",
+        },
+      };
+    }
+
+    const models = await resolveOpenRouterModels(env, options, timeoutMs);
+    if (models.length === 0 && !env.NVIDIA_API_KEY?.trim()) {
+      return {
+        ok: false,
+        text: "",
+        model: null,
+        attempts,
+        error: {
+          code: "no_models",
+          message: "No hay modelos free con salida de texto disponibles.",
+        },
+      };
+    }
+
+    if (models.length > 0) {
+      const headers: Record<string, string> = {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${openRouterKey}`,
+      };
+      if (env.OPENROUTER_SITE_URL?.trim()) {
+        headers["HTTP-Referer"] = env.OPENROUTER_SITE_URL.trim();
+      }
+      if (env.OPENROUTER_APP_NAME?.trim()) {
+        headers["X-Title"] = env.OPENROUTER_APP_NAME.trim();
+      }
+      providers.push({ provider: "openrouter", url, headers, models });
+    }
+  }
+
+  const nvidiaKey = env.NVIDIA_API_KEY?.trim();
+  if (nvidiaKey) {
+    const baseUrl = env.NVIDIA_BASE_URL?.trim() || NVIDIA_BASE_URL;
+    let url: URL;
+    try {
+      url = joinEndpoint(baseUrl, "/chat/completions");
+    } catch {
+      return {
+        ok: false,
+        text: "",
+        model: null,
+        attempts,
+        error: {
+          code: "invalid_config",
+          message: "NVIDIA_BASE_URL no es una URL válida.",
+        },
+      };
+    }
+
+    const preferred = env.NVIDIA_MODEL?.trim();
+    const models = preferred
+      ? [preferred, ...NVIDIA_DEFAULT_MODELS.filter((id) => id !== preferred)]
+      : [...NVIDIA_DEFAULT_MODELS];
+    providers.push({
+      provider: "nvidia",
+      url,
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${nvidiaKey}`,
+      },
+      models: models.slice(0, 2),
+    });
+  }
+
+  if (providers.length === 0) {
     return {
       ok: false,
       text: "",
       model: null,
       attempts,
       error: {
-        code: "no_models",
-        message: "No hay modelos free con salida de texto disponibles.",
+        code: "missing_api_key",
+        message:
+          "Falta OPENROUTER_API_KEY o NVIDIA_API_KEY en el entorno del analyzer.",
       },
     };
   }
 
-  const headers: Record<string, string> = {
-    Accept: "application/json",
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${apiKey}`,
-  };
-  if (env.OPENROUTER_SITE_URL?.trim()) {
-    headers["HTTP-Referer"] = env.OPENROUTER_SITE_URL.trim();
-  }
-  if (env.OPENROUTER_APP_NAME?.trim()) {
-    headers["X-Title"] = env.OPENROUTER_APP_NAME.trim();
-  }
-
   let lastError: GeneralError | undefined;
 
-  for (const model of models) {
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      const response = await fetchJson(
-        url.toString(),
-        {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
+  for (const provider of providers) {
+    let stopProvider = false;
+
+    for (const model of provider.models) {
+      for (let attempt = 0; attempt <= retries; attempt++) {
+        const response = await fetchJson(
+          provider.url.toString(),
+          {
+            method: "POST",
+            headers: provider.headers,
+            body: JSON.stringify({
+              model,
+              messages,
+              temperature,
+              max_tokens: maxTokens,
+              stream: false,
+              reasoning: { effort: "none" },
+            }),
+          },
+          timeoutMs,
+        );
+
+        if (!response.ok) {
+          const error = response.error;
+          attempts.push({
+            provider: provider.provider,
             model,
-            messages,
-            temperature,
-            max_tokens: maxTokens,
-            stream: false,
-            reasoning: { effort: "none" },
-          }),
-        },
-        timeoutMs,
-      );
+            attempt: attempt + 1,
+            ...(error.status !== undefined ? { status: error.status } : {}),
+            code: error.code,
+            message: error.message,
+          });
+          if (!lastError?.retryable || error.retryable) lastError = error;
 
-      if (!response.ok) {
-        const error = response.error;
-        attempts.push({
-          model,
-          attempt: attempt + 1,
-          ...(error.status !== undefined ? { status: error.status } : {}),
-          code: error.code,
-          message: error.message,
-        });
-        if (!lastError?.retryable || error.retryable) lastError = error;
+          // La cuota diaria la comparten todos los free: no insistas con el
+          // siguiente modelo y pasa al proveedor de respaldo.
+          if (isDailyQuotaExhausted(error)) {
+            stopProvider = true;
+            break;
+          }
 
-        if (error.code === "unauthorized" && !isModelScopedUnauthorized(error, model)) {
-          return { ok: false, text: "", model: null, attempts, error };
+          if (error.code === "unauthorized" && !isModelScopedUnauthorized(error, model)) {
+            stopProvider = true;
+            break;
+          }
+
+          if (!error.retryable || attempt === retries) break;
+          await sleep(retryDelayMs * 2 ** attempt);
+          continue;
         }
 
-        if (!error.retryable || attempt === retries) break;
-        await sleep(retryDelayMs * 2 ** attempt);
-        continue;
-      }
+        const payload = response.payload;
+        if (isRecord(payload) && payload.error !== undefined) {
+          const error: GeneralError = {
+            code: "provider_error",
+            message: providerMessage(payload, `El proveedor rechazó el modelo ${model}.`),
+          };
+          attempts.push({
+            provider: provider.provider,
+            model,
+            attempt: attempt + 1,
+            code: error.code,
+            message: error.message,
+          });
+          lastError = { ...error, retryable: true };
+          if (attempt === retries) break;
+          await sleep(retryDelayMs * 2 ** attempt);
+          continue;
+        }
 
-      const payload = response.payload;
-      if (isRecord(payload) && payload.error !== undefined) {
-        const error: GeneralError = {
-          code: "provider_error",
-          message: providerMessage(payload, `OpenRouter rechazó el modelo ${model}.`),
-        };
-        attempts.push({
+        const text = extractOpenRouterText(payload);
+        if (!text) {
+          const error: GeneralError = {
+            code: "empty_text",
+            message: `El modelo ${model} no devolvió texto.`,
+            retryable: true,
+          };
+          attempts.push({
+            provider: provider.provider,
+            model,
+            attempt: attempt + 1,
+            code: error.code,
+            message: error.message,
+          });
+          lastError = error;
+          if (attempt === retries) break;
+          await sleep(retryDelayMs * 2 ** attempt);
+          continue;
+        }
+
+        const usage = extractOpenRouterUsage(payload);
+        return {
+          ok: true,
+          text,
           model,
-          attempt: attempt + 1,
-          code: error.code,
-          message: error.message,
-        });
-        lastError = { ...error, retryable: true };
-        if (attempt === retries) break;
-        await sleep(retryDelayMs * 2 ** attempt);
-        continue;
-      }
-
-      const text = extractOpenRouterText(payload);
-      if (!text) {
-        const error: GeneralError = {
-          code: "empty_text",
-          message: `El modelo ${model} no devolvió texto.`,
-          retryable: true,
+          provider: provider.provider,
+          ...(usage ? { usage } : {}),
+          attempts,
         };
-        attempts.push({
-          model,
-          attempt: attempt + 1,
-          code: error.code,
-          message: error.message,
-        });
-        lastError = error;
-        if (attempt === retries) break;
-        await sleep(retryDelayMs * 2 ** attempt);
-        continue;
       }
 
-      const usage = extractOpenRouterUsage(payload);
-      return {
-        ok: true,
-        text,
-        model,
-        ...(usage ? { usage } : {}),
-        attempts,
-      };
+      if (stopProvider) break;
     }
   }
+
+  const error: GeneralError =
+    lastError ?? {
+      code: "no_text_response",
+      message: "Ningún modelo free devolvió texto.",
+    };
 
   return {
     ok: false,
@@ -1017,9 +1126,11 @@ export async function callOpenRouter(
     model: null,
     attempts,
     error:
-      lastError ?? {
-        code: "no_text_response",
-        message: "Ningún modelo free devolvió texto.",
-      },
+      isDailyQuotaExhausted(error) && !providers.some((item) => item.provider === "nvidia")
+        ? {
+            ...error,
+            message: `${error.message} Configura NVIDIA_API_KEY como respaldo.`,
+          }
+        : error,
   };
 }

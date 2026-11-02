@@ -6,7 +6,7 @@ TypeScript, [Hono](https://hono.dev/) y Cloudflare Workers.
 > **Modo demo.** Las entidades, relaciones, evidencias y análisis que devuelven
 > las rutas de expediente son ficticios. No representan empresas ni personas
 > reales. El manifiesto declara el modo demo y esas respuestas incluyen la
-> cabecera `X-Consta-Demo: true`. No uses esos datos como fuente de verdad.
+> cabecera `X-Consta-Demo: true`.
 >
 > `POST /identity/investigate` es distinto: busca en Tavily y Wikidata y no
 > envía `X-Consta-Demo`. Un campo sin URL de esas búsquedas queda en
@@ -35,10 +35,16 @@ Directo en el paquete:
 
 ```bash
 pnpm --filter @consta/backend dev
+pnpm --filter @consta/backend test
 pnpm --filter @consta/backend typecheck
 pnpm --filter @consta/backend build
 pnpm --filter @consta/backend deploy
 ```
+
+`test` ejecuta `node --test` con el runner nativo de Node sobre
+`backend/test/sourceScore.test.ts`. No requiere dependencias ni red: el loader
+`test/register.mjs` resuelve imports relativos sin extensión a `.ts` con
+`--experimental-strip-types`.
 
 `build` ejecuta `wrangler deploy --dry-run --outdir dist`, así que valida el
 bundle sin publicar. `wrangler dev` carga variables desde `.dev.vars`; usa
@@ -62,6 +68,7 @@ bundle sin publicar. `wrangler dev` carga variables desde `.dev.vars`; usa
 | `POST` | `/analyze` | `AnalysisRun` demo. Acepta `{ entityId?, query?, depth? }`. |
 | `POST` | `/identity/investigate` | Investigación de identidad. Acepta `{ name, details? }` y devuelve `{ plan, rounds, candidates }`. No lleva `X-Consta-Demo`. |
 | `POST` | `/identity/more` | Hasta dos búsquedas extra. Acepta `{ name, details?, investigation }` y busca NIT, teléfono, correo, representante legal, dirección y documento nacional. |
+| `POST` | `/identity/connections` | Una vuelta del loop de conexiones sobre un candidato confirmado. Acepta `{ name, details?, investigation, candidateId, connection?, branchContext }` y devuelve `{ claims, rounds, summary, canContinue, stoppedReason }`.
 
 ### Ejemplos
 
@@ -81,6 +88,10 @@ curl -X POST "http://localhost:8787/analyze" \
 curl -X POST "http://localhost:8787/identity/investigate" \
   -H "Content-Type: application/json" \
   -d '{"name":"Banco de Guatemala","details":"banco central"}'
+
+curl -X POST "http://localhost:8787/identity/connections" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Banco de Guatemala","details":"banco central","investigation": {...}, "candidateId": "c1", "connection": {...}, "branchContext": {"entityId": "ent1", "claimId": "clm1", "label": "rama1"}}'
 ```
 
 Validaciones relevantes:
@@ -107,16 +118,16 @@ Todos los errores usan la forma `ApiError` del contrato:
 {
   "error": {
     "code": "entity_not_found",
-    "message": "No existe una entidad demo con id \"gt-nit:000\"."
+    "message": "No existe una entidad demo con id \"gt-nit:000\"".
   }
 }
 ```
 
 Códigos usados: `missing_parameter`, `invalid_parameter`, `invalid_json`,
 `invalid_body`, `entity_not_found`, `document_not_found`, `not_found`,
-`invalid_plan`, `invalid_model_json` e `internal_error` (este último con
-`retryable: true`). La identidad también puede reenviar el código de Tavily u
-OpenRouter, por ejemplo `missing_api_key`.
+`invalid_plan`, `invalid_model_json`, `candidate_not_found` e `internal_error`
+(este último con `retryable: true`). La identidad también puede reenviar el
+código de Tavily u OpenRouter, por ejemplo `missing_api_key`.
 
 ## Identidad
 
@@ -132,6 +143,7 @@ El backend hace, en este orden:
    primera ola no busca NIT ni cargo: son dos consultas para saber si el
    nombre es persona o empresa. Wikidata recibe el nombre exacto. Tavily
    recibe el mismo nombre en noticieros.
+
 2. Hasta tres rondas. Cada query se busca solo en la herramienta elegida. Si
    la herramienta falta o no es `wikidata` ni `tavily`, esa query se busca en
    ambas y no se descarta. Si el tipo ya es persona, las consultas siguientes
@@ -139,6 +151,7 @@ El backend hace, en este orden:
    en un registro. Si es empresa, van a registros públicos (NIT, razón social,
    dirección, sitio, teléfono, representante, constitución). Si el tipo sigue
    sin resolverse, la siguiente consulta solo intenta distinguirlo.
+
 3. El modelo actualiza `candidates`. La ronda siguiente no depende de que
    pida NIT: se arma con el tipo ya encontrado. En la tercera ronda no hay
    otra búsqueda. Un perfil incompleto sigue siendo un candidato: si el
@@ -149,7 +162,7 @@ El backend hace, en este orden:
 
 La respuesta es `{ plan, rounds, candidates }`. Cada candidato trae los 15
 campos del contrato, en el orden de `IDENTITY_FIELD_DEFINITIONS`. Cada campo
-tiene `value`, `status` (`found`, `not_found`, `conflicting` o `alleged`),
+ tiene `value`, `status` (`found`, `not_found`, `conflicting` o `alleged`),
 `note` (una aclaración opcional, por ejemplo que una dirección es de una
 oficina y no del domicilio), `score`, `confidence` y `sources[]` con
 `source`, `title` y `url`. Después de armar los candidatos, `scoreResults`
@@ -166,8 +179,111 @@ Si una ronda posterior falla y ya hay plan o búsquedas, el estado es 502 y el
 cuerpo incluye lo acumulado más `error`. El JSON del modelo tiene un intento
 de reparación; si tampoco parsea, el error es `invalid_model_json`.
 
-Usa `TAVILY_API_KEY` y `OPENROUTER_API_KEY`. Sin esas keys la búsqueda o el
-modelo devuelven `missing_api_key` y la ruta no se marca como demo.
+Usa `TAVILY_API_KEY` y un modelo (`OPENROUTER_API_KEY`, con `NVIDIA_API_KEY`
+como respaldo). Sin la key de búsqueda, o sin ninguna key de modelo, la
+respuesta es `missing_api_key` y la ruta no se marca como demo.
+
+La puntuación quedó recalibrada: una sola fuente fuerte ya alcanza `probable`,
+pero una fuente nunca pasa de 79 puntos, así que `corroborated` exige al menos
+dos orígenes independientes. Un origen no es un host: dos notas del mismo medio
+cuentan una sola vez y una nota sindicada o republicada en otro dominio, con el
+mismo titular (normalizado sin acentos, puntuación ni el sufijo del medio, o con un
+solapamiento de tokens de 0.92 o más), tampoco corrobora. `scoreResults` ya no
+premia la repetición dentro del mismo medio ni dentro de un solo dominio.
+Las pruebas deterministas de esta regla viven en `backend/test` y se ejecutan
+con `pnpm --filter @consta/backend test`.
+
+### Conexiones
+
+`POST /identity/connections` es el paso siguiente a la confirmación de un
+candidato. El cuerpo es
+{`"name": "...", "details": "...", "investigation": {...}, "candidateId": "c1", "connection": {...}, "branchContext": {"entityId": "...", "claimId": "...", "label": "..."}}`.
+
+**`branchContext`** es un objeto opcional que permite profundizar en una rama específica de la investigación. Este contexto ayuda a enfocar las búsquedas en conexiones de segundo grado y a conectar hallazgos con el sujeto principal.
+
+- **`entityId`**: Identificador de una entidad específica dentro de la investigación.
+- **`claimId`**: Identificador de una afirmación específica.
+- **`label`**: Etiqueta descriptiva para el contexto de la rama.
+
+El endpoint ahora valida que `branchContext` sea un objeto válido y que sus campos sean cadenas.
+
+Cada request ejecuta **una sola vuelta** para no agotar el timeout de 300 s. El
+frontend encadena hasta tres mientras `canContinue` sea `true`. La parada es
+anticipada cuando no hay afirmaciones nuevas.
+
+En la primera llamada, sin `connection`, el backend:
+
+1. Busca el candidato por `candidateId`.
+2. Crea la afirmación raíz `root`: texto
+   `El sujeto investigado es <etiqueta>.`, `round: 0`, `parentId: null` y
+   `sources` con la unión de las fuentes de los campos del candidato (máximo
+   5, con el `score` que dejó la investigación inicial).
+3. Arma `summary.who` con `candidate.description` o, si falta, una frase con
+   tipo, ocupación, nacionalidad y dirección. `findings` empieza en
+   "Todavía no hay afirmaciones probables.".
+4. Devuelve `canContinue: true` si el candidato existe.
+
+Si ya viene `connection` con `canContinue: false` o con tres rondas, se
+devuelve sin cambios.
+
+Cada vuelta hace, en este orden:
+
+1. **Plan de conexiones.** Una llamada al modelo recibe el nombre, `details`,
+   `summary.who`, la afirmación raíz, las afirmaciones acumuladas y las
+   consultas previas. Devuelve de 1 a 5 consultas con el mismo formato
+   `{ query, purpose, tool }` de la investigación (`tool` es `wikidata` o
+   `tavily`; si falta o no es válido, la consulta se busca en ambas). `purpose`
+   describe la conexión o afirmación a explorar, no un campo de perfil. Se
+   descartan las consultas que repiten una `queryKey` previa.
+
+2. **Búsquedas.** Se ejecutan con `searchIdentityQuery`, la misma función de la
+   investigación. Si no hay resultados, la vuelta se detiene con
+   `stoppedReason: "sin resultados"`.
+
+3. **Minipaso de identificación por lote.** Una sola llamada al modelo recibe
+   los resultados numerados del lote y elige hasta 5 instituciones, empresas y
+   personas públicas más importantes. No puede inventar: cada `name` debe
+   aparecer en el `title` o el `snippet` de algún resultado (se comprueba con
+   `mentionsName`) y se descarta al sujeto consultado y a las entidades ya
+   resueltas. Cada entidad se resuelve en una pasada: `searchIdentityQuery`
+   con `{ query: name, tool: null }`, una ronda sintética y
+   `candidatesFromPublicResults`. Se elige el candidato cuyo `label` o `name`
+   coincide mejor; si no hay, queda una entidad mínima `type: "unknown"` con
+   descripción "Sin identidad pública resuelta.". Estas búsquedas se agregan a
+   `rounds[].searches` (y a la lista de fuentes del razonamiento) y al catálogo
+   de la vuelta. No hay una llamada de scoring por entidad.
+
+4. **Razonamiento.** Otra llamada recibe el nombre, `details`, `summary.who`, la
+   afirmación raíz, las afirmaciones acumuladas, las entidades identificadas y
+   la lista **numerada** de fuentes de la vuelta (`source`, `title`, `snippet`;
+   nunca URLs). Devuelve solo
+   `{"claims":[{"afirmacion":"...","parentText":"...","entidades":["..."],
+   "fuentes":[1,2],"confianza":"probable"}]}`. `fuentes` son índices de la
+   lista numerada: el backend los convierte en enlaces y descarta la afirmación
+   si no queda ninguna fuente válida. `parentText` se resuelve contra las
+   afirmaciones ya acumuladas para armar el hilo; `entidades` se cruza con las
+   identificadas en el minipaso anterior y se descarta al sujeto.
+
+5. **Ficha completa de cada entidad.** Para cada entidad nueva se ejecuta
+   `investigateIdentity`, el mismo motor del flujo manual, con sus búsquedas,
+   rondas y scoring. La IA propone los candidatos y el backend conserva el que
+   coincide con el nombre y sostiene más campos (`pickEntityProfile`), sin que
+   el periodista elija. La ficha queda en `entities[].profile` y completa
+   `description` y `sources` de la entidad. Los perfiles ya resueltos se
+   reutilizan entre vueltas, y cada vuelta completa hasta 12 fichas pendientes
+   con concurrencia 4. El sujeto queda fuera: su ficha ya está confirmada en el
+   panel. Las fichas pendientes de vueltas anteriores se reintentan en la
+   siguiente vuelta.
+
+La respuesta es `{ claims, rounds, summary, canContinue, stoppedReason }`.
+`claims` acumula la raíz y las afirmaciones nuevas con sus fuentes, entidades,
+puntaje y confianza. `rounds[]` guarda las consultas, búsquedas, entidades y
+afirmaciones de cada vuelta. `summary` mantiene el contexto del sujeto y el
+conteo de afirmaciones. La investigación completa por entidad multiplica las
+llamadas al modelo y las búsquedas: es el costo de que cada tarjeta llegue con
+su ficha resuelta. Las etiquetas de relación («hermano», «ministro») no viajan
+en el grafo; el frontend las deriva del texto solo para la tabla de
+afirmaciones.
 
 ## CORS
 
@@ -225,7 +341,13 @@ lanza: un 429, un 5xx, un timeout o un error de red se reintenta dos veces.
 free que declaran salida de texto. Si `/models` responde, filtra por `:free` y
 `output_modalities` con `text`; si no, usa una lista de respaldo. Reintenta
 429, 5xx, timeout, errores de red y una respuesta sin texto antes de pasar al
-siguiente modelo.
+siguiente modelo. Si la cuota diaria `free-models-per-day` se agota (la
+comparten todos los `:free`), si la clave de OpenRouter falla o si ningún
+modelo devuelve texto, pasa a NVIDIA NIM (`NVIDIA_BASE_URL`, por defecto
+`https://integrate.api.nvidia.com/v1`) con `NVIDIA_MODEL` o, si falta,
+`nemotron-3.5-lightning` y luego `bolt`. El resultado indica el proveedor que
+atendió (`provider`). Los intentos quedan en `attempts` con su `provider`,
+`model` y código de error.
 
 Devuelve `{ ok, text, model, usage?, attempts, error? }`. No lanza. Un 401 de
 la clave detiene el recorrido. Un 403 que nombra a un modelo concreto lo salta
@@ -253,6 +375,9 @@ Opciones: `models`, `temperature`, `maxTokens`, `timeoutMs`, `retries` y
 | `OPENROUTER_MODELS` | Lista separada por comas; reemplaza el descubrimiento. | Vacío. |
 | `OPENROUTER_SITE_URL` | `HTTP-Referer` para OpenRouter. | Vacío. |
 | `OPENROUTER_APP_NAME` | `X-Title` para OpenRouter. | Vacío. |
+| `NVIDIA_API_KEY` | API key server-side de NVIDIA NIM, respaldo de OpenRouter. | Vacío: no hay respaldo. |
+| `NVIDIA_BASE_URL` | Base de NVIDIA NIM. | `https://integrate.api.nvidia.com/v1`. |
+| `NVIDIA_MODEL` | Modelo de NVIDIA preferido; si falta, usa lightning y bolt. | Vacío. |
 
 Copia `.dev.vars.example` a `.dev.vars` para desarrollo local. `.dev.vars` está
 ignorado por git.

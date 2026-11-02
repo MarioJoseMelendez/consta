@@ -1,14 +1,23 @@
 import type {
+  IdentityClaim,
+  IdentityConnectionRound,
+  IdentityConnectionState,
+  IdentityConnectionsRequest,
+  IdentityConnectionsResponse,
   IdentityInvestigation,
   IdentityInvestigationRequest,
   IdentityInvestigationResponse,
+  IdentitySummary,
 } from "@consta/contracts";
 
 const API_BASE = (
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8787"
 ).replace(/\/+$/, "");
 
-export const IDENTITY_TIMEOUT_MS = 180_000;
+/** El plan y hasta tres rondas de búsqueda y modelo: varios minutos. */
+export const IDENTITY_TIMEOUT_MS = 300_000;
+/** Una vuelta de conexiones puede tardar más: búsquedas + scoring + modelo. */
+export const CONNECTION_TIMEOUT_MS = 300_000;
 
 export class IdentityApiError extends Error {
   readonly code: string;
@@ -25,6 +34,28 @@ export class IdentityApiError extends Error {
   ) {
     super(message);
     this.name = "IdentityApiError";
+    this.code = code;
+    this.status = status;
+    this.retryable = retryable;
+    this.partial = partial;
+  }
+}
+
+export class ConnectionApiError extends Error {
+  readonly code: string;
+  readonly status: number;
+  readonly retryable: boolean;
+  readonly partial: IdentityConnectionState | null;
+
+  constructor(
+    message: string,
+    code: string,
+    status: number,
+    retryable: boolean,
+    partial: IdentityConnectionState | null,
+  ) {
+    super(message);
+    this.name = "ConnectionApiError";
     this.code = code;
     this.status = status;
     this.retryable = retryable;
@@ -67,6 +98,70 @@ function hasPartial(value: IdentityInvestigation): boolean {
     value.rounds.length > 0 ||
     value.candidates.length > 0
   );
+}
+
+function isSummary(value: unknown): value is IdentitySummary {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.who === "string" &&
+    typeof value.findings === "string" &&
+    typeof value.text === "string" &&
+    typeof value.claims === "number"
+  );
+}
+
+function isConnectionState(value: unknown): value is IdentityConnectionState {
+  if (!isRecord(value)) return false;
+  return (
+    Array.isArray(value.claims) &&
+    Array.isArray(value.rounds) &&
+    isSummary(value.summary) &&
+    typeof value.canContinue === "boolean" &&
+    (value.stoppedReason == null || typeof value.stoppedReason === "string")
+  );
+}
+
+/**
+ * Normaliza el estado acumulado. Los elementos de `claims` y `rounds` ya
+ * vienen del backend; solo se comprueba la estructura del sobre para no
+ * reenviar datos de una respuesta inválida en la siguiente vuelta.
+ */
+function connectionStateOf(value: unknown): IdentityConnectionState | null {
+  if (!isConnectionState(value)) return null;
+  return {
+    claims: value.claims as IdentityClaim[],
+    rounds: value.rounds as IdentityConnectionRound[],
+    summary: value.summary,
+    canContinue: value.canContinue,
+    stoppedReason: value.stoppedReason ?? null,
+  };
+}
+
+/**
+ * En un 502 el backend puede devolver solo lo acumulado. Ahí se tolera un
+ * resumen incompleto: lo importante es no perder afirmaciones ya tejidas.
+ */
+function partialConnectionStateOf(
+  value: unknown,
+): IdentityConnectionState | null {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.claims) ||
+    !Array.isArray(value.rounds)
+  ) {
+    return null;
+  }
+  const claims = value.claims as IdentityClaim[];
+  return {
+    claims,
+    rounds: value.rounds as IdentityConnectionRound[],
+    summary: isSummary(value.summary)
+      ? value.summary
+      : { who: "", findings: "", text: "", claims: claims.length },
+    canContinue: value.canContinue === true,
+    stoppedReason:
+      typeof value.stoppedReason === "string" ? value.stoppedReason : null,
+  };
 }
 
 async function postIdentity(
@@ -128,7 +223,7 @@ async function postIdentity(
     if (error instanceof IdentityApiError) throw error;
     if (error instanceof DOMException && error.name === "AbortError") {
       throw new IdentityApiError(
-        "La investigación superó los 180 segundos.",
+        "La investigación superó los 300 segundos.",
         "timeout",
         0,
         true,
@@ -168,4 +263,97 @@ export async function requestMoreIdentity(input: {
     ...(details ? { details } : {}),
     investigation: input.investigation,
   });
+}
+
+export async function requestIdentityConnections(
+  input: IdentityConnectionsRequest,
+): Promise<IdentityConnectionsResponse> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), CONNECTION_TIMEOUT_MS);
+  const details = input.details?.trim();
+
+  try {
+    const response = await fetch(`${API_BASE}/identity/connections`, {
+      method: "POST",
+      cache: "no-store",
+      signal: controller.signal,
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        name: input.name.trim(),
+        ...(details ? { details } : {}),
+        investigation: input.investigation,
+        candidateId: input.candidateId,
+        ...(input.connection ? { connection: input.connection } : {}),
+        ...(input.branchContext ? { branchContext: input.branchContext } : {}),
+      }),
+    });
+
+    let payload: unknown = null;
+    try {
+      payload = (await response.json()) as unknown;
+    } catch {
+      payload = null;
+    }
+
+    const state = connectionStateOf(payload);
+    const partial = partialConnectionStateOf(payload);
+    const failure = readError(payload);
+
+    if (!response.ok) {
+      throw new ConnectionApiError(
+        failure?.message ??
+          `Las conexiones no pudieron completarse (${response.status}).`,
+        failure?.code ?? "request_failed",
+        response.status,
+        failure?.retryable ?? false,
+        partial,
+      );
+    }
+
+    if (!state) {
+      throw new ConnectionApiError(
+        "La respuesta de conexiones no tiene el formato esperado.",
+        "invalid_response",
+        response.status,
+        false,
+        null,
+      );
+    }
+
+    return {
+      ...state,
+      ...(failure
+        ? {
+            error: {
+              code: failure.code,
+              message: failure.message,
+              ...(failure.retryable ? { retryable: true } : {}),
+            },
+          }
+        : {}),
+    };
+  } catch (error) {
+    if (error instanceof ConnectionApiError) throw error;
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new ConnectionApiError(
+        "Las conexiones superaron los 300 segundos.",
+        "timeout",
+        0,
+        true,
+        null,
+      );
+    }
+    throw new ConnectionApiError(
+      "No se pudo contactar el servicio de conexiones.",
+      "network_error",
+      0,
+      true,
+      null,
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
 }

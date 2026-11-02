@@ -322,3 +322,89 @@ export interface IdentityInvestigationRequest {
 export interface IdentityInvestigationResponse extends IdentityInvestigation {
   error?: ApiError["error"];
 }
+
+/* --------------------------------------------------------------------------
+   Identidad — loop de conexiones y afirmaciones
+   -------------------------------------------------------------------------- */
+
+/** Entidad pública resuelta por el minipaso de identificación. */
+export interface IdentityEntity {
+  id: string;
+  label: string;
+  type: IdentityProfileType;
+  /** Contexto breve: quién es o qué institución es. */
+  description: string;
+  sources: IdentitySourceRef[];
+  score: number | null;
+  confidence: IdentityConfidence | null;
+  /**
+   * Ficha completa que resolvió el motor de identidad para esta entidad.
+   * La IA elige el candidato; el periodista solo la consulta al abrir la
+   * tarjeta. Null si ninguna fuente sostuvo una ficha.
+   */
+  profile?: IdentityCandidate | null;
+}
+
+/**
+ * Afirmación específica extraída del razonamiento.
+ * `parentId` se resuelve en el backend comparando `parentText` con las
+ * afirmaciones anteriores. La IA nunca escribe URLs: solo devuelve números
+ * de la lista enumerada de fuentes y el backend los convierte en enlaces.
+ */
+export interface IdentityClaim {
+  id: string;
+  text: string;
+  parentId: string | null;
+  parentText: string;
+  sources: IdentitySourceRef[];
+  /** Identidades que rodean la afirmación, para la vista de conexiones. */
+  entities: IdentityEntity[];
+  score: number;
+  confidence: IdentityConfidence;
+  /** 0 es la afirmación raíz; 1..3 son las vueltas del loop. */
+  round: number;
+}
+
+export interface IdentityConnectionRound {
+  round: number;
+  queries: IdentityToolQuery[];
+  searches: IdentityQueryResult[];
+  entities: IdentityEntity[];
+  claims: IdentityClaim[];
+  reason: string;
+  stopped: boolean;
+}
+
+/** Contexto estable del sujeto: quién es y qué se encontró. */
+export interface IdentitySummary {
+  who: string;
+  findings: string;
+  text: string;
+  claims: number;
+}
+
+/** Estado acumulado que el frontend reenvía para la siguiente vuelta. */
+export interface IdentityConnectionState {
+  claims: IdentityClaim[];
+  rounds: IdentityConnectionRound[];
+  summary: IdentitySummary;
+  canContinue: boolean;
+  stoppedReason: string | null;
+}
+
+export interface IdentityConnectionsRequest {
+  name: string;
+  details?: string;
+  investigation: IdentityInvestigation;
+  candidateId: string;
+  connection?: IdentityConnectionState;
+  branchContext?: {
+    entityId?: string;
+    claimId?: string;
+    label?: string;
+  };
+}
+
+export interface IdentityConnectionsResponse extends IdentityConnectionState {
+  error?: ApiError["error"];
+}
