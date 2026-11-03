@@ -151,6 +151,10 @@ export interface GraphNode {
   label: string;
   kind: EntityKind;
   status: IdentityStatus;
+  /** Principal subject of a connection map. Drawn as a hexagon. */
+  role?: "subject";
+  /** 1 = tied to the subject, 2 = open branch, 3 = closed against the subject. */
+  degree?: 1 | 2 | 3;
 }
 
 export interface GraphEdge {
@@ -160,6 +164,7 @@ export interface GraphEdge {
   label: string;
   type: RelationshipType;
   status: IdentityStatus;
+  degree?: 1 | 2 | 3;
 }
 
 export interface AnalysisRun {

@@ -16,6 +16,7 @@ import {
 } from "@consta/contracts";
 
 import NetworkMap from "../Graph";
+import { connectionTableRows } from "./connectionTable";
 import IdentityProfileFields, {
   OccupationPhoto,
   identityConfidenceLabelEn,
@@ -559,13 +560,41 @@ function edgeLabelOf(edge: GraphEdge): string {
   return "connection";
 }
 
+function nodeDegreeOf(graph: Graph, node: GraphNode): 1 | 2 | 3 | undefined {
+  if (node.isSubject) return undefined;
+  const subject = graph.nodes.find((item) => item.isSubject);
+  const incident = graph.edges.filter(
+    (edge) => edge.from === node.id || edge.to === node.id,
+  );
+  const toSubject = incident.filter(
+    (edge) => edge.from === subject?.id || edge.to === subject?.id,
+  );
+  if (toSubject.length === 0) return 2;
+  const minRound = Math.min(
+    ...toSubject.flatMap((edge) => edge.claims.map((claim) => claim.round)),
+    node.round || 1,
+  );
+  return minRound >= 3 ? 3 : 1;
+}
+
+function edgeDegreeOf(edge: GraphEdge, subjectId: string): 1 | 2 | 3 {
+  const touchesSubject = edge.from === subjectId || edge.to === subjectId;
+  const minRound = Math.min(...edge.claims.map((claim) => claim.round), 1);
+  if (touchesSubject && minRound >= 3) return 3;
+  if (touchesSubject) return 1;
+  return 2;
+}
+
 function toMapGraph(graph: Graph): { nodes: MapNode[]; edges: MapEdge[] } {
+  const subjectId = graph.nodes.find((node) => node.isSubject)?.id ?? "";
   return {
     nodes: graph.nodes.map((node) => ({
       id: node.id,
       label: node.label,
       kind: entityKindOf(node.type),
       status: node.isSubject ? "confirmed" : edgeStatusOf(node.claims),
+      role: node.isSubject ? "subject" : undefined,
+      degree: nodeDegreeOf(graph, node),
     })),
     edges: graph.edges.map((edge) => ({
       id: edge.id,
@@ -574,6 +603,7 @@ function toMapGraph(graph: Graph): { nodes: MapNode[]; edges: MapEdge[] } {
       label: edgeLabelOf(edge),
       type: relationshipTypeOf(edge.relation),
       status: edgeStatusOf(edge.claims),
+      degree: edgeDegreeOf(edge, subjectId),
     })),
   };
 }
@@ -678,16 +708,11 @@ function AffirmationTable({
   pair?: { from: string; to: string };
   onOpenEntity?: (entity: IdentityEntity) => void;
 }) {
-  const all = affirmationRows(claims, subjectLabel, allClaims ?? claims);
-  const sideMatches = (left: string, right: string) =>
-    samePersonLabel(left, right, subjectLabel);
   const rows = pair
-    ? all.filter(
-        (row) =>
-          (sideMatches(row.from, pair.from) && sideMatches(row.to, pair.to)) ||
-          (sideMatches(row.from, pair.to) && sideMatches(row.to, pair.from)),
+    ? connectionTableRows(claims, pair, (text, label) =>
+        relationFor(text, label),
       )
-    : all;
+    : affirmationRows(claims, subjectLabel, allClaims ?? claims);
 
   return (
     <div className="claim-evidence-scroll">
@@ -975,7 +1000,7 @@ export default function ClaimsWeb({
             onSelectEdge={openEdge}
             compact
             theme="paper"
-            hint="Click a thread to read the claims. Click a person or company to open their card."
+            hint="Scroll to zoom, drag to move. Click a thread to read the claims. Click a person or company to open their card."
             statusLegend={{
               confirmed: "Corroborated",
               probable: "Probable",
