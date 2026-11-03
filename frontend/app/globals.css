@@ -1109,6 +1109,91 @@ code {
   overflow: hidden;
 }
 
+.graph-viewport {
+  position: relative;
+  height: 28rem;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  background-image:
+    linear-gradient(to right, var(--graph-grid) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--graph-grid) 1px, transparent 1px);
+  background-size: 34px 34px;
+}
+
+.graph-viewport.is-panning {
+  cursor: grabbing;
+}
+
+.graph--narrow .graph-viewport {
+  height: 26rem;
+}
+
+.graph-nav {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  z-index: 2;
+  display: flex;
+  gap: 8px;
+}
+
+.graph-nav button {
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: var(--fs-2);
+  line-height: 1;
+}
+
+.graph-nav button:hover {
+  border-color: var(--lime);
+  color: var(--lime-dark);
+}
+
+.graph-node.is-subject .node-shape {
+  fill: var(--lime);
+  stroke: var(--lime-dark);
+  stroke-width: 1.6;
+}
+
+.graph-node.is-subject .node-core {
+  fill: var(--ink);
+}
+
+.graph-node.degree-1 .node-shape {
+  stroke: var(--lime);
+}
+
+.graph-node.degree-2 .node-shape {
+  stroke: rgba(28, 28, 30, 0.38);
+  fill: var(--paper-deep);
+}
+
+.graph-node.degree-3 .node-shape {
+  stroke: var(--lime-dark);
+  stroke-dasharray: 4 3;
+}
+
+.graph-edge.degree-1 .edge-line {
+  stroke: var(--lime);
+  stroke-width: 1.6;
+}
+
+.graph-edge.degree-2 .edge-line {
+  stroke: rgba(28, 28, 30, 0.34);
+}
+
+.graph-edge.degree-3 .edge-line {
+  stroke: var(--lime-dark);
+  stroke-dasharray: 5 4;
+}
+
 .graph--paper {
   --graph-label: var(--paper-ink);
   --graph-muted: rgba(18, 23, 20, 0.5);
@@ -1123,12 +1208,8 @@ code {
 .graph-svg {
   display: block;
   width: 100%;
-  height: auto;
+  height: 100%;
   overflow: visible;
-  background-image:
-    linear-gradient(to right, var(--graph-grid) 1px, transparent 1px),
-    linear-gradient(to bottom, var(--graph-grid) 1px, transparent 1px);
-  background-size: 34px 34px;
 }
 
 .graph-node {
@@ -3102,8 +3183,8 @@ code {
 }
 
 .graph-panel .graph-svg {
-  max-width: 880px;
-  margin-inline: auto;
+  width: 100%;
+  height: 100%;
 }
 
 .relationship-row {
@@ -4339,8 +4420,8 @@ code {
   }
 
   .graph--narrow .graph-svg {
-    max-width: 420px;
-    margin-inline: auto;
+    width: 100%;
+    height: 100%;
   }
 
   .graph--narrow .graph-legend {
@@ -5320,13 +5401,57 @@ code {
 }
 
 .identity-profile {
-  margin-top: 1.8rem;
+  margin-top: var(--space-4);
+  display: grid;
+  gap: var(--space-4);
+}
+
+.identity-evidence-photo {
+  margin: 0;
+  width: min(100%, 34rem);
+  padding: var(--space-2);
+  padding-bottom: var(--space-3);
+  background: var(--paper);
+  box-shadow:
+    0 1px 0 rgba(28, 28, 30, 0.08),
+    8px 13px 21px rgba(28, 28, 30, 0.14);
+  transform: rotate(-0.4deg);
+}
+
+.identity-evidence-photo .claim-card-image,
+.identity-evidence-photo .claim-card-initials {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 5;
+  object-fit: cover;
+  background: var(--ink);
+}
+
+.identity-evidence-photo .claim-card-initials {
+  display: grid;
+  place-items: center;
+  font-size: var(--fs-4);
+  color: var(--canvas);
+}
+
+.identity-evidence-photo figcaption {
+  margin-top: var(--space-2);
+  color: var(--muted-strong);
+  font-size: var(--fs-2);
+  letter-spacing: -0.011em;
+}
+
+.identity-expediente {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--paper);
+  border: 1px solid var(--line);
 }
 
 .identity-profile-head {
-  display: flex;
-  gap: 1rem;
-  align-items: center;
+  display: grid;
+  gap: var(--space-1);
 }
 
 .identity-profile-photo {
@@ -5336,9 +5461,7 @@ code {
   width: 4.6rem;
   height: 4.6rem;
   border: 1px solid var(--line);
-  background:
-    radial-gradient(circle at 50% 32%, rgba(216, 255, 62, 0.16), transparent 62%),
-    linear-gradient(160deg, var(--ink-deep), var(--ink-soft));
+  background: var(--ink);
   overflow: hidden;
 }
 
@@ -5347,9 +5470,9 @@ code {
 }
 
 .identity-profile-head h3 {
-  margin-top: 0.45rem;
-  font-size: clamp(2rem, 4vw, 3rem);
-  color: var(--paper);
+  margin: 0;
+  font-size: var(--fs-4);
+  color: var(--ink);
 }
 
 .identity-fields {
@@ -6422,11 +6545,11 @@ body::before {
 .identity-subject {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
-  gap: 1rem 1.6rem;
-  margin-top: 1rem;
-  padding: 1rem;
-  border: 1px solid var(--line);
-  background: var(--ink-soft);
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .identity-subject .mono-label {
@@ -6611,8 +6734,13 @@ body::before {
 }
 
 .claims-map .graph-svg {
-  max-width: 880px;
+  width: 100%;
+  height: 100%;
   margin-inline: auto;
+}
+
+.claims-map .graph-viewport {
+  height: 34rem;
 }
 
 .claims-web-head {
@@ -6814,7 +6942,6 @@ body::before {
 }
 
 .identity-candidate,
-.identity-profile,
 .identity-connections,
 .identity-weaving,
 .claims-web,
@@ -6824,6 +6951,27 @@ body::before {
   border-radius: var(--radius);
   background: var(--paper);
   box-shadow: none;
+}
+
+.identity-profile {
+  background: transparent;
+  padding: 0;
+}
+
+.identity-expediente .identity-fields {
+  margin-top: 0;
+}
+
+.identity-expediente .identity-field-card {
+  min-height: 0;
+  box-shadow: none;
+  border: 1px solid var(--line);
+}
+
+.identity-evidence-photo .claim-card-image {
+  height: auto;
+  object-fit: cover;
+  image-rendering: pixelated;
 }
 
 .identity-candidate {
