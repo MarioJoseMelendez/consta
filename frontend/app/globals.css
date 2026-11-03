@@ -6810,6 +6810,7 @@ body::before {
   font-weight: 600;
   line-height: 1.05;
   letter-spacing: -0.04em;
+  color: var(--ink);
 }
 
 .identity-candidate,
@@ -6883,4 +6884,24 @@ body::before {
   background: var(--lime);
   border-color: var(--lime);
   color: var(--paper);
+}
+
+/* Light surfaces after the mint restyle: ink text, not leftover white. */
+.identity-phase[data-state="current"],
+.claim-thread-text,
+.claim-evidence-table a,
+.claim-affirmations-table .claim-thread-entity,
+.claim-row-text,
+.claim-card-name,
+.claim-card-initials,
+.claim-node-title,
+.claim-connection-pair,
+.stat dd,
+.feature-card p,
+.rule-card p {
+  color: var(--ink);
+}
+
+.claims-map .graph-legend {
+  border-top-color: var(--line);
 }
