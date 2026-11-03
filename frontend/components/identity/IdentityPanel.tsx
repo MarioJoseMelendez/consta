@@ -541,42 +541,49 @@ export default function IdentityPanel() {
           className="identity-profile"
           aria-label={`Profile of ${confirmed.label}`}
         >
-          <div className="identity-profile-head">
-            <span className="identity-profile-photo" aria-hidden="true">
-              <OccupationPhoto
-                label={confirmed.label}
-                occupation={fieldOf(confirmed, "occupation").value}
-              />
-            </span>
-            <div>
-              <p className="mono-label">Confirmed subject</p>
+          <figure className="identity-evidence-photo">
+            <OccupationPhoto
+              label={confirmed.label}
+              occupation={fieldOf(confirmed, "occupation").value}
+            />
+            <figcaption>
+              Found photograph
+              {fieldOf(confirmed, "occupation").value
+                ? ` · ${fieldOf(confirmed, "occupation").value}`
+                : ""}
+            </figcaption>
+          </figure>
+
+          <div className="identity-expediente">
+            <header className="identity-profile-head">
+              <p className="mono-label">Expediente</p>
               <h3>{confirmed.label}</h3>
-            </div>
-          </div>
+            </header>
 
-          <div className="identity-subject">
-            <div>
-              <p className="mono-label">Who they are</p>
-              <p>
-                {summary?.who.trim() ||
-                  confirmed.description ||
-                  "The subject context is still being resolved."}
-              </p>
+            <div className="identity-subject">
+              <div>
+                <p className="mono-label">Who they are</p>
+                <p>
+                  {summary?.who.trim() ||
+                    confirmed.description ||
+                    "The subject context is still being resolved."}
+                </p>
+              </div>
+              <div>
+                <p className="mono-label">Findings</p>
+                <p>
+                  {summary?.findings.trim() ||
+                    (weaving
+                      ? "Connections are still being mapped."
+                      : connectionPhase === "error"
+                        ? "The subject context could not be completed."
+                        : "There is no findings summary yet.")}
+                </p>
+              </div>
             </div>
-            <div>
-              <p className="mono-label">Findings</p>
-              <p>
-                {summary?.findings.trim() ||
-                  (weaving
-                    ? "Connections are still being mapped."
-                    : connectionPhase === "error"
-                      ? "The subject context could not be completed."
-                      : "There is no findings summary yet.")}
-              </p>
-            </div>
-          </div>
 
-          <IdentityProfileFields candidate={confirmed} />
+            <IdentityProfileFields candidate={confirmed} />
+          </div>
         </div>
       ) : null}
 
