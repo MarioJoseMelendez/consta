@@ -545,6 +545,7 @@ export default function IdentityPanel() {
             <OccupationPhoto
               label={confirmed.label}
               occupation={fieldOf(confirmed, "occupation").value}
+              kind={fieldOf(confirmed, "type").value}
             />
             <figcaption>
               Found photograph

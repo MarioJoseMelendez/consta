@@ -22,9 +22,65 @@ export const CONNECTION_TIMEOUT_MS = 300_000;
 /** El guardado es una escritura corta; no debe retener la interfaz. */
 export const SAVE_TIMEOUT_MS = 20_000;
 
-/** URL del pixel art de una ocupación. La misma ocupación se cachea. */
-export function occupationImageUrl(occupation: string): string {
-  return `${API_BASE}/occupation-image?name=${encodeURIComponent(occupation)}`;
+export const PLACEHOLDER_PERSONA = "persona";
+export const PLACEHOLDER_EMPRESA = "empresa";
+
+export interface OccupationImageMeta {
+  occupation: string;
+  cached: boolean;
+  pending: boolean;
+  placeholder: "persona" | "empresa" | null;
+}
+
+const EMPTY_OCCUPATIONS = new Set([
+  "null",
+  "undefined",
+  "none",
+  "n/a",
+  "na",
+  "ninguno",
+  "ninguna",
+  "sin dato",
+  "sin datos",
+  "no aplica",
+]);
+
+/** "null" and similar strings are not a job title. */
+export function occupationText(value?: string | null): string {
+  const text = value?.trim() ?? "";
+  if (!text) return "";
+  const key = text.toLocaleLowerCase("es").replace(/[.]+$/, "");
+  return EMPTY_OCCUPATIONS.has(key) ? "" : text;
+}
+
+/** URL of an occupation photo or a persona/empresa placeholder. */
+export function occupationImageUrl(
+  occupation: string,
+  options?: { kind?: string | null; meta?: boolean },
+): string {
+  const params = new URLSearchParams({ name: occupation });
+  if (options?.kind) params.set("kind", options.kind);
+  if (options?.meta) params.set("meta", "1");
+  return `${API_BASE}/occupation-image?${params.toString()}`;
+}
+
+export function occupationPhotoPlaceholder(
+  kind?: string | null,
+): "persona" | "empresa" {
+  return kind === "enterprise" || kind === "company" || kind === "agency"
+    ? PLACEHOLDER_EMPRESA
+    : PLACEHOLDER_PERSONA;
+}
+
+export function shouldPollOccupationImage(
+  kind?: string | null,
+  occupation?: string | null,
+): boolean {
+  return kind === "person" && Boolean(occupationText(occupation));
+}
+
+export function isGeneratedOccupationImage(meta: OccupationImageMeta): boolean {
+  return meta.cached && !meta.pending && meta.placeholder == null;
 }
 
 export class IdentityApiError extends Error {

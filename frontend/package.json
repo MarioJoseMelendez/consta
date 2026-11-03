@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test test/connectionTable.test.ts"
+    "test": "node --experimental-strip-types --test test/connectionTable.test.ts test/occupationImage.test.ts"
   },
   "dependencies": {
     "@consta/contracts": "workspace:*",

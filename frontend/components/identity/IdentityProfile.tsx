@@ -15,7 +15,14 @@ import {
   type IdentitySourceRef,
   type IdentitySourceTier,
 } from "@consta/contracts";
-import { occupationImageUrl } from "@/lib/identity";
+import {
+  isGeneratedOccupationImage,
+  occupationImageUrl,
+  occupationPhotoPlaceholder,
+  occupationText,
+  shouldPollOccupationImage,
+  type OccupationImageMeta,
+} from "@/lib/identity";
 
 const FIELD_LABELS: Record<IdentityFieldKey, string> = {
   type: "Type",
@@ -143,49 +150,76 @@ export function identityInitials(label: string): string {
   return picked.join("") || label.slice(0, 1).toUpperCase();
 }
 
-/**
- * "null", "none" y similares llegan como texto desde investigaciones
- * antiguas. No son una ocupación: mejor mostrar las iniciales.
- */
-const EMPTY_OCCUPATIONS = new Set([
-  "null",
-  "undefined",
-  "none",
-  "n/a",
-  "na",
-  "ninguno",
-  "ninguna",
-  "sin dato",
-  "sin datos",
-  "no aplica",
-]);
+const OCCUPATION_IMAGE_POLL_MS = 1_200;
+const OCCUPATION_IMAGE_POLL_MAX = 24;
 
-function occupationText(value?: string | null): string {
-  const text = value?.trim() ?? "";
-  if (!text) return "";
-  const key = text.toLocaleLowerCase("es").replace(/[.]+$/, "");
-  return EMPTY_OCCUPATIONS.has(key) ? "" : text;
+function isOccupationMeta(value: unknown): value is OccupationImageMeta {
+  if (typeof value !== "object" || value === null) return false;
+  const meta = value as OccupationImageMeta;
+  return (
+    typeof meta.cached === "boolean" &&
+    typeof meta.pending === "boolean" &&
+    (meta.placeholder === "persona" ||
+      meta.placeholder === "empresa" ||
+      meta.placeholder == null)
+  );
 }
 
 /**
- * Foto pixel art de la ocupación, con las iniciales como respaldo. Si la
- * ocupación no existe o la imagen falla, la tarjeta sigue siendo legible.
+ * Evidence photo. People start on the persona placeholder and swap if a
+ * generated occupation portrait arrives. Companies always use empresa.
  */
 export function OccupationPhoto({
   label,
   occupation,
+  kind,
 }: {
   label: string;
   occupation?: string | null;
+  kind?: string | null;
 }) {
-  const value = occupationText(occupation);
+  const placeholder = occupationPhotoPlaceholder(kind);
+  const placeholderSrc = occupationImageUrl(placeholder);
+  const [src, setSrc] = useState(placeholderSrc);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
+    setSrc(placeholderSrc);
     setFailed(false);
-  }, [value]);
+    if (!shouldPollOccupationImage(kind, occupation)) return;
+    const value = occupationText(occupation);
+    if (!value) return;
 
-  if (!value || failed) {
+    const controller = new AbortController();
+    void (async () => {
+      for (let attempt = 0; attempt < OCCUPATION_IMAGE_POLL_MAX; attempt += 1) {
+        if (controller.signal.aborted) return;
+        try {
+          const response = await fetch(
+            occupationImageUrl(value, { kind: "person", meta: true }),
+            { cache: "no-store", signal: controller.signal },
+          );
+          if (!response.ok) return;
+          const payload: unknown = await response.json();
+          if (!isOccupationMeta(payload)) return;
+          if (isGeneratedOccupationImage(payload)) {
+            setSrc(occupationImageUrl(value, { kind: "person" }));
+            return;
+          }
+          if (!payload.pending) return;
+        } catch {
+          if (controller.signal.aborted) return;
+        }
+        await new Promise((resolve) => {
+          window.setTimeout(resolve, OCCUPATION_IMAGE_POLL_MS);
+        });
+      }
+    })();
+
+    return () => controller.abort();
+  }, [kind, occupation, placeholderSrc]);
+
+  if (failed) {
     return (
       <span className="claim-card-initials">{identityInitials(label)}</span>
     );
@@ -194,7 +228,7 @@ export function OccupationPhoto({
   return (
     <img
       className="claim-card-image"
-      src={occupationImageUrl(value)}
+      src={src}
       alt=""
       draggable={false}
       onError={() => setFailed(true)}

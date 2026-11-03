@@ -826,7 +826,11 @@ function IdentityDetail({
     <div className="claim-evidence claim-node-detail">
       <div className="claim-node-head">
         <span className="claim-card-photo claim-node-photo" aria-hidden="true">
-          <OccupationPhoto label={node.label} occupation={occupation} />
+          <OccupationPhoto
+            label={node.label}
+            occupation={occupation}
+            kind={node.type}
+          />
         </span>
         <div>
           <h4 className="claim-node-title">{node.label}</h4>
