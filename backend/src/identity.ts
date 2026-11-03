@@ -1325,6 +1325,24 @@ function pullLabeled(text: string, label: RegExp): string[] {
   return value ? [value] : [];
 }
 
+const MONTH_DATE =
+  "\\d{1,2}\\s+de\\s+[A-Za-zÁÉÍÓÚáéíóú]+\\s+de\\s+\\d{4}|\\d{1,2}\\s+[A-Za-zÁÉÍÓÚáéíóú]+\\s+\\d{4}|[A-Za-zÁÉÍÓÚáéíóú]+\\s+\\d{1,2},?\\s+\\d{4}|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}/\\d{1,2}/\\d{4}";
+
+function pullBirthDates(text: string): string[] {
+  const labeled = pullLabeled(
+    text,
+    new RegExp(
+      `(?:fecha de nacimiento|date of birth|born(?:\\s+on)?|naci[oó]|nacida)[:\\s]+(?:el\\s+|the\\s+)?(${MONTH_DATE})`,
+      "i",
+    ),
+  );
+  if (labeled.length > 0) return labeled;
+  if (!/(nacimiento|naci[oó]|nacida|born|birth)/i.test(text)) return [];
+  const loose = text.match(new RegExp(`\\b(${MONTH_DATE})\\b`, "i"));
+  const value = loose ? clip(loose[1], 80) : null;
+  return value ? [value] : [];
+}
+
 function pullAliases(text: string): string[] {
   const values: string[] = [];
   const re = /(?:siglas?|alias)\s*(?:es|:)\s*["“]?([A-ZÁÉÍÓÚ][^.;\n]{1,40})/g;
@@ -1381,7 +1399,7 @@ function evidenceValues(key: IdentityFieldKey, item: IdentitySearchItem): string
     case "nationality":
       return pullLabeled(text, /nacionalidad[:\s]+([^.;\n]{3,40})/i);
     case "dateOfBirth":
-      return pullLabeled(text, /(?:fecha de nacimiento|naci[oó]|nacida)[:\s]+([^.;\n]{4,40})/i);
+      return pullBirthDates(text);
     case "occupation":
       return pullLabeled(text, /(?:ocupaci[oó]n|cargo)\s*:\s*([^.;\n]{3,80})/i);
     default:
@@ -1441,11 +1459,47 @@ function sourcedField(
   };
 }
 
+const SNIPPET_FIELDS: readonly IdentityFieldKey[] = [
+  "dateOfBirth",
+  "occupation",
+  "nationality",
+  "aliases",
+  "type",
+  "incorporationDate",
+  "socialName",
+  "legalRepresentative",
+  "website",
+  "phone",
+  "email",
+  "taxesID",
+  "nationalID",
+  "address",
+];
+
+function itemMentionsSubject(
+  item: IdentitySearchItem,
+  label: string,
+  name: string,
+): boolean {
+  return (
+    mentionsName(item.title, label) ||
+    mentionsName(item.snippet, label) ||
+    mentionsName(item.title, name) ||
+    mentionsName(item.snippet, name)
+  );
+}
+
+function queryMentionsSubject(query: string, label: string, name: string): boolean {
+  return mentionsName(query, name) || mentionsName(query, label);
+}
+
 /**
- * Completa campos not_found con un valor escrito en la búsqueda de ese campo.
- * No pisa un valor que el modelo ya dejó en found o conflicting.
+ * Completa campos not_found con un valor escrito en los resultados.
+ * Si la consulta ya nombra al sujeto, el snippet no tiene que repetir el
+ * nombre: "Nació el 22 de abril de 1985" bajo "sam altman fecha de nacimiento"
+ * cuenta. No pisa un valor que el modelo ya dejó en found o conflicting.
  */
-function fillFromSearches(
+export function fillFromSearches(
   candidates: IdentityCandidate[],
   name: string,
   queries: IdentityToolQuery[],
@@ -1466,41 +1520,38 @@ function fillFromSearches(
       const target = primaryField(
         queries[index]?.purpose ? mentionedFieldKeys(queries[index].purpose ?? "") : [],
       );
-      if (!target || target === "name") return;
-      const about = search.items.filter(
-        (item) =>
-          mentionsName(item.title, label) ||
-          mentionsName(item.snippet, label) ||
-          mentionsName(item.title, name) ||
-          mentionsName(item.snippet, name),
-      );
+      const scoped = queryMentionsSubject(search.query, label, name);
+      const about = scoped
+        ? search.items
+        : search.items.filter((item) => itemMentionsSubject(item, label, name));
       for (const item of about) {
-        add(target, item, evidenceValues(target, item));
+        if (target && target !== "name") {
+          add(target, item, evidenceValues(target, item));
+        }
+        for (const key of SNIPPET_FIELDS) {
+          if (key === target) continue;
+          add(key, item, evidenceValues(key, item));
+        }
       }
     });
-
-    for (const search of searches) {
-      for (const item of search.items) {
-        if (item.source !== "wikidata") continue;
-        if (
-          !mentionsName(item.title, label) &&
-          !mentionsName(item.snippet, label) &&
-          !mentionsName(item.title, name) &&
-          !mentionsName(item.snippet, name)
-        ) {
-          continue;
-        }
-        add("type", item, evidenceValues("type", item));
-      }
-    }
 
     for (const [key, pairs] of buckets) {
       const field = sourcedField(key, pairs);
       if (!field) continue;
+      const preferred =
+        key === "occupation"
+          ? next.fields.find((current) => current.key === "occupation" && current.status !== "not_found")
+              ?.value
+          : null;
+      const value =
+        key === "occupation" ? pickSingleOccupation(field.value, preferred) : field.value;
+      if (!value) continue;
       next = {
         ...next,
         fields: next.fields.map((current) =>
-          current.key === key && current.status === "not_found" ? field : current,
+          current.key === key && current.status === "not_found"
+            ? { ...field, value }
+            : current,
         ),
       };
     }

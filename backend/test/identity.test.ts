@@ -9,12 +9,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { IdentityClaim, IdentityEntity } from "@consta/contracts";
+import {
+  emptyIdentityField,
+  IDENTITY_FIELD_KEYS,
+  type IdentityCandidate,
+  type IdentityClaim,
+  type IdentityEntity,
+} from "@consta/contracts";
 
 import {
   canContinueConnectionLoop,
   connectionBranches,
   connectionRoundBeat,
+  fillFromSearches,
   journalistInterestNote,
   mentionsEntity,
   pickSingleOccupation,
@@ -194,4 +201,95 @@ test("pickSingleOccupation: sin cargo guardado elige uno solo", () => {
   assert.equal(pickSingleOccupation("CEO"), "CEO");
   assert.equal(pickSingleOccupation("null"), null);
   assert.equal(pickSingleOccupation(["", "none"]), null);
+});
+
+function blankCandidate(label: string): IdentityCandidate {
+  return {
+    id: "c1",
+    label,
+    description: "",
+    fields: IDENTITY_FIELD_KEYS.map((key) => emptyIdentityField(key)),
+  };
+}
+
+test("fillFromSearches: una fecha de nacimiento en el snippet llega al perfil", () => {
+  const filled = fillFromSearches(
+    [blankCandidate("Sam Altman")],
+    "Sam Altman",
+    [
+      {
+        query: "sam altman fecha de nacimiento",
+        tool: "tavily",
+        purpose: "dateOfBirth / Fecha de nacimiento. Noticieros.",
+      },
+    ],
+    [
+      {
+        query: "sam altman fecha de nacimiento",
+        tool: "tavily",
+        items: [
+          {
+            source: "tavily",
+            title: "Biografía",
+            url: "https://example.test/sam-altman",
+            snippet: "Nació el 22 de abril de 1985 en Chicago",
+          },
+        ],
+        errors: [],
+      },
+    ],
+  );
+  const field = filled[0]?.fields.find((item) => item.key === "dateOfBirth");
+  assert.equal(field?.status, "found");
+  assert.match(field?.value ?? "", /22 de abril de 1985/i);
+  assert.equal(field?.sources[0]?.url, "https://example.test/sam-altman");
+});
+
+test("fillFromSearches: no pisa un cargo ya encontrado", () => {
+  const candidate = blankCandidate("Sam Altman");
+  candidate.fields = candidate.fields.map((field) =>
+    field.key === "occupation"
+      ? {
+          ...field,
+          value: "CEO",
+          status: "found" as const,
+          sources: [
+            {
+              source: "tavily" as const,
+              title: "Perfil",
+              url: "https://example.test/ceo",
+            },
+          ],
+        }
+      : field,
+  );
+  const filled = fillFromSearches(
+    [candidate],
+    "Sam Altman",
+    [
+      {
+        query: "sam altman cargo",
+        tool: "tavily",
+        purpose: "occupation / Ocupación. Noticieros.",
+      },
+    ],
+    [
+      {
+        query: "sam altman cargo",
+        tool: "tavily",
+        items: [
+          {
+            source: "tavily",
+            title: "Sam Altman",
+            url: "https://example.test/titles",
+            snippet: "ocupación: CEO, fundador y presidente",
+          },
+        ],
+        errors: [],
+      },
+    ],
+  );
+  const field = filled[0]?.fields.find((item) => item.key === "occupation");
+  assert.equal(field?.value, "CEO");
+  assert.equal(field?.status, "found");
 });
