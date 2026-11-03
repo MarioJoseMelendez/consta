@@ -70,7 +70,7 @@ bundle sin publicar. `wrangler dev` carga variables desde `.dev.vars`; usa
 | `POST` | `/identity/more` | Hasta dos búsquedas extra. Acepta `{ name, details?, interest?, investigation }` y busca NIT, teléfono, correo, representante legal, dirección y documento nacional. |
 | `POST` | `/identity/connections` | Una vuelta del loop de conexiones sobre un candidato confirmado. Acepta `{ name, details?, interest?, investigation, candidateId, connection?, branchContext }` y devuelve `{ claims, rounds, summary, canContinue, stoppedReason }`.
 | `POST` | `/identity/analysis` | Guarda o actualiza un análisis completo en D1. Acepta `{ name, details?, interest?, candidate?, connection }`; es idempotente por hash de contenido y devuelve `{ id, created, claims, entities }`. |
-| `GET` | `/occupation-image?name=` | Pixel art de la ocupación. Se genera una vez, se guarda en D1 y se sirve con caché inmutable. |
+| `GET` | `/occupation-image?name=` | Foto de ocupación o placeholder `persona`/`empresa`. `kind=person|enterprise` y `meta=1` para el estado. No bloquea identidad. |
 
 ### Ejemplos
 
@@ -260,20 +260,27 @@ a una búsqueda `LIKE` para no romper la investigación.
 
 ### Imágenes por ocupación
 
-`GET /occupation-image?name=Médico` devuelve un SVG pixel art determinista de
-24×24. La misma ocupación produce siempre la misma imagen y se cachea en
-`occupation_images`. El frontend la usa en la foto de la tarjeta y en la ficha
-del sujeto; si no hay ocupación o la imagen falla, cae a las iniciales.
+Las fotos no bloquean identidad ni conexiones. `POST /identity/investigate`
+devuelve el expediente al instante y, si el sujeto es una persona, encola la
+imagen con `waitUntil`. `GET /occupation-image` también responde de inmediato.
 
-Si la fuente trae varios cargos ("Médico, político y empresario"), el endpoint
-los separa y reutiliza el primero que ya exista en `occupation_images`; solo si
-ninguno está guardado genera la imagen del cargo principal y la guarda con esa
-clave. Así no se crea una imagen nueva por cada lista de cargos.
+Hay dos placeholders en `occupation_images`:
 
-Hoy el proveedor es `mock` y no hace llamadas externas. La interfaz queda lista
-para `IMAGE_PROVIDER=openrouter` con `IMAGE_MODEL=meta/muse-image` o
-`google/gemini-3.1-flash-lite-image`. En OpenRouter no hay modelos de imagen
-gratuitos: el más barato con endpoint publicado ronda US$0.00003 por imagen.
+- `persona`: retrato genérico. Se muestra mientras la foto no está lista, si
+  no hay match en D1, o si la generación falla.
+- `empresa`: edificio / institución. Las empresas y agencias **nunca** reciben
+  un retrato generado.
+
+`GET /occupation-image?name=Médico&kind=person` reutiliza el cargo ya guardado.
+Solo si no hay match se dispara **una** generación (cero reintentos). Hasta
+entonces el JSON `?meta=1` marca `pending: true` y `placeholder: "persona"`.
+Si el modelo falla, se guarda el placeholder bajo esa ocupación para no volver
+a llamar. `kind=enterprise` (o `name=empresa`) sirve el edificio y no genera.
+
+El prompt de pixel art vive en `occupationImage.ts` (`occupationImagePrompt`):
+rejilla 24×24, paleta tinta/menta/verde, busto de frente, sin fotorealismo ni
+texto. Con `IMAGE_PROVIDER=mock` el SVG local es determinista por cargo.
+`openrouter` y `nvidia` hacen una sola llamada a `/images/generations`.
 
 En la primera llamada, sin `connection`, el backend:
 
@@ -436,8 +443,8 @@ Opciones: `models`, `temperature`, `maxTokens`, `timeoutMs`, `retries` y
 | `NVIDIA_BASE_URL` | Base de NVIDIA NIM. | `https://integrate.api.nvidia.com/v1`. |
 | `NVIDIA_MODEL` | Modelo de NVIDIA preferido; si falta, usa lightning y bolt. | Vacío. |
 | `DB` | Binding D1 de la base compartida (`bd` e imágenes). | Configurado en `wrangler.jsonc`. |
-| `IMAGE_PROVIDER` | `mock` (pixel art local) u `openrouter` cuando se conecte. | `mock`. |
-| `IMAGE_MODEL` | Modelo de imagen previsto. | `meta/muse-image`. |
+| `IMAGE_PROVIDER` | `mock` (pixel art local), `openrouter` o `nvidia`. Una sola llamada; si falla, `persona`. | `mock`. |
+| `IMAGE_MODEL` | Modelo de imagen. | `meta/muse-image`. |
 
 Copia `.dev.vars.example` a `.dev.vars` para desarrollo local. `.dev.vars` está
 ignorado por git.
@@ -486,9 +493,11 @@ backend/
   wrangler.jsonc
   migrations/
     0001_identity_analysis.sql  # análisis, afirmaciones, FTS5 e imágenes
+    0002_occupation_placeholders.sql  # claves persona y empresa
   src/
     analyze.ts   # grafo, claims y run determinista
-    db.ts        # guardado, búsqueda bd y pixel art por ocupación
+    db.ts        # guardado, búsqueda bd e imágenes en D1
+    occupationImage.ts  # placeholders, generación async y prompt pixel art
     gt.ts        # cliente del Channel GT con timeout y fallback
     index.ts     # Hono, rutas, CORS y validación
 ```

@@ -1,6 +1,6 @@
 /**
- * Pruebas deterministas de la base de investigaciones y del mock de imagen.
- * No tocan D1: validan claves, hash de contenido y pixel art.
+ * Pruebas deterministas de la base de investigaciones.
+ * No tocan D1: validan claves, hash de contenido y ocupación.
  */
 
 import assert from "node:assert/strict";
@@ -10,10 +10,7 @@ import type { IdentityAnalysisSaveRequest } from "@consta/contracts";
 
 import {
   analysisContentHash,
-  imageProvider,
   occupationCandidates,
-  pixelArtFor,
-  resolveOccupationImage,
   savedKey,
   searchSavedClaims,
 } from "../src/db.ts";
@@ -88,34 +85,6 @@ test("sin binding D1, bd no rompe la búsqueda", async () => {
   assert.deepEqual(await searchSavedClaims(undefined, "Ana Ruiz"), []);
 });
 
-test("el pixel art es determinista y distinto por ocupación", () => {
-  const doctor = pixelArtFor("Médico");
-  const doctorAgain = pixelArtFor("Médico");
-  const judge = pixelArtFor("Juez");
-
-  assert.equal(doctor.mime, "image/svg+xml; charset=utf-8");
-  assert.equal(doctor.width, 24);
-  assert.deepEqual(
-    new Uint8Array(doctor.bytes),
-    new Uint8Array(doctorAgain.bytes),
-  );
-  assert.notDeepEqual(
-    new Uint8Array(doctor.bytes),
-    new Uint8Array(judge.bytes),
-  );
-});
-
-test("el proveedor de imagen cae al mock por defecto", () => {
-  assert.deepEqual(imageProvider({}), {
-    provider: "mock",
-    model: "meta/muse-image",
-  });
-  assert.deepEqual(imageProvider({ IMAGE_PROVIDER: "openrouter" }), {
-    provider: "openrouter",
-    model: "meta/muse-image",
-  });
-});
-
 test("bd devuelve la afirmación guardada con sus fuentes originales", async () => {  const sources = [
     {
       source: "tavily",
@@ -171,73 +140,5 @@ test("separa una ocupación compuesta en cargos", () => {
     "Médico (cirujano)",
     "Médico",
   ]);
-});
-
-function fakeOccupationDb(rows: Map<string, Record<string, unknown>>) {
-  const written: Array<{ key: string; binds: unknown[] }> = [];
-  const db = {
-    prepare() {
-      return {
-        bind(...args: unknown[]) {
-          const key = String(args[0] ?? "");
-          return {
-            first: async () => rows.get(key) ?? null,
-            run: async () => {
-              written.push({ key, binds: args });
-              return { success: true };
-            },
-            all: async () => ({ results: [] }),
-          };
-        },
-      };
-    },
-  } as unknown as D1Database;
-  return { db, written };
-}
-
-test("una ocupación compuesta reutiliza el cargo que ya está guardado", async () => {
-  const sentinel = new TextEncoder().encode("<svg>cache</svg>");
-  const rows = new Map<string, Record<string, unknown>>([
-    [
-      "medico",
-      {
-        mime: "image/svg+xml",
-        width: 24,
-        height: 24,
-        bytes: sentinel.buffer.slice(0),
-      },
-    ],
-  ]);
-  const { db, written } = fakeOccupationDb(rows);
-  const resolved = await resolveOccupationImage(
-    db,
-    {},
-    "Empresario, médico y político",
-  );
-
-  assert.equal(resolved?.cached, true);
-  assert.equal(resolved?.occupation, "médico");
-  assert.equal(
-    new TextDecoder().decode(new Uint8Array(resolved!.image.bytes)),
-    "<svg>cache</svg>",
-  );
-  assert.equal(written.length, 0);
-});
-
-test("sin cargo guardado, genera el principal y lo guarda", async () => {
-  const { db, written } = fakeOccupationDb(new Map());
-  const resolved = await resolveOccupationImage(db, {}, "Ingeniero, docente");
-
-  assert.equal(resolved?.cached, false);
-  assert.equal(resolved?.occupation, "Ingeniero");
-  assert.equal(written.length, 1);
-  assert.equal(written[0]?.key, "ingeniero");
-});
-
-test("un valor null no genera imagen", async () => {
   assert.deepEqual(occupationCandidates("null"), []);
-  assert.equal(
-    await resolveOccupationImage(undefined, {}, "ninguna"),
-    null,
-  );
 });

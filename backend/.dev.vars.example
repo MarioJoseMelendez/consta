@@ -44,6 +44,7 @@ ENVIRONMENT=demo
 # NVIDIA_MODEL=nvidia/nemotron-3.5-lightning-30b-a3b
 
 # Imágenes pixel art por ocupación. `mock` genera SVG local, sin llamadas.
-# Para conectar OpenRouter más adelante, usa IMAGE_PROVIDER=openrouter.
+# `openrouter` o `nvidia` hacen una sola llamada; si falla, se usa `persona`.
+# Las empresas nunca generan retratos: usan el placeholder `empresa`.
 # IMAGE_PROVIDER=mock
 # IMAGE_MODEL=meta/muse-image

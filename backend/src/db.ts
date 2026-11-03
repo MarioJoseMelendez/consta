@@ -1,6 +1,6 @@
 /**
- * Persistencia de investigaciones de identidad (D1 + FTS5) e imágenes pixel
- * art por ocupación.
+ * Persistencia de investigaciones de identidad (D1 + FTS5) e imágenes
+ * de ocupación. La generación vive en occupationImage.ts y no bloquea D1.
  *
  * La base es global y compartida. `bd` nunca es una fuente: devuelve
  * afirmaciones ya guardadas con sus fuentes originales, su score y su nivel
@@ -487,6 +487,9 @@ export interface OccupationImage {
   width: number;
   height: number;
   bytes: ArrayBuffer;
+  /** `placeholder` means a reserved persona/empresa asset or a failed attempt. */
+  provider?: string;
+  model?: string;
 }
 
 function toArrayBuffer(value: unknown): ArrayBuffer | null {
@@ -515,7 +518,7 @@ export async function readOccupationImage(
   try {
     const row = await db
       .prepare(
-        `SELECT mime, width, height, bytes
+        `SELECT mime, width, height, bytes, provider, model
          FROM occupation_images
          WHERE occupation_key = ?`,
       )
@@ -529,6 +532,8 @@ export async function readOccupationImage(
       width: typeof row.width === "number" ? row.width : 24,
       height: typeof row.height === "number" ? row.height : 24,
       bytes,
+      ...(typeof row.provider === "string" ? { provider: row.provider } : {}),
+      ...(typeof row.model === "string" ? { model: row.model } : {}),
     };
   } catch {
     return null;
@@ -624,292 +629,4 @@ export function occupationCandidates(occupation: string): string[] {
     if (out.length === OCCUPATION_LIST_MAX) break;
   }
   return out;
-}
-
-export interface ResolvedOccupationImage {
-  image: OccupationImage;
-  /** Cargo con el que se resolvió la imagen. */
-  occupation: string;
-  cached: boolean;
-}
-
-/**
- * Resuelve el pixel art de una ocupación compuesta. Primero busca en la base
- * cada cargo, en el orden en que los escribió la fuente; si ninguno está
- * guardado, genera el cargo principal y lo guarda. De este modo
- * "Médico, político y empresario" reutiliza "Médico" si ya existe en lugar de
- * crear una imagen nueva para la lista completa.
- */
-export async function resolveOccupationImage(
-  db: D1Database | undefined,
-  env: { IMAGE_PROVIDER?: string; IMAGE_MODEL?: string },
-  occupation: string,
-): Promise<ResolvedOccupationImage | null> {
-  const candidates = occupationCandidates(occupation);
-  if (candidates.length === 0) return null;
-
-  for (const candidate of candidates) {
-    const cached = await readOccupationImage(db, candidate);
-    if (cached) {
-      return { image: cached, occupation: candidate, cached: true };
-    }
-  }
-
-  // Para generar se usa el primer cargo, no la lista completa: así la imagen
-  // se guarda con una clave que otra investigación puede reutilizar.
-  const fullKey = savedKey(occupation);
-  const primary =
-    candidates.find((candidate) => savedKey(candidate) !== fullKey) ??
-    candidates[0]!;
-  const image = generateOccupationImage(env, primary);
-  if (db) {
-    const config = imageProvider(env);
-    try {
-      await saveOccupationImage(db, primary, image, config.provider, config.model);
-    } catch {
-      // Se sirve igual la imagen generada.
-    }
-  }
-  return { image, occupation: primary, cached: false };
-}
-
-/** FNV-1a: variación determinista por ocupación, sin dependencias. */
-function hashOf(text: string): number {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < text.length; index += 1) {
-    hash ^= text.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return hash >>> 0;
-}
-
-type OccupationKind =
-  | "health"
-  | "law"
-  | "security"
-  | "education"
-  | "tech"
-  | "business"
-  | "politics"
-  | "art"
-  | "sport"
-  | "work";
-
-function occupationKind(occupation: string): OccupationKind {
-  const key = savedKey(occupation);
-  if (/medic|doctor|salud|enfermer|cirujan|odont|farmac|psicolog/.test(key)) {
-    return "health";
-  }
-  if (/abogad|juez|fiscal|jurid|notari|legal/.test(key)) return "law";
-  if (/polic|militar|soldad|guardia|seguridad|bomber|vigilante/.test(key)) {
-    return "security";
-  }
-  if (/profesor|docente|maestr|educad|rector|pedagog/.test(key)) {
-    return "education";
-  }
-  if (/ingenier|program|desarroll|software|tecnolog|sistem|datos|cientific/.test(key)) {
-    return "tech";
-  }
-  if (/empresari|gerente|director|financ|contador|econom|banquer|comerciante/.test(key)) {
-    return "business";
-  }
-  if (/politic|senador|diputad|alcalde|gobernador|president|ministr|congres/.test(key)) {
-    return "politics";
-  }
-  if (/artist|musico|pintor|actor|actriz|escritor|periodist|comunicador|diseñador|disenador/.test(key)) {
-    return "art";
-  }
-  if (/deport|futbol|jugador|entrenador|atleta/.test(key)) return "sport";
-  return "work";
-}
-
-interface PixelPalette {
-  background: string;
-  skin: string;
-  hair: string;
-  shirt: string;
-  accent: string;
-}
-
-function paletteFor(hash: number): PixelPalette {
-  const skins = ["#f2c9a0", "#dba173", "#b97a4f", "#8a5a35", "#5f3d25"];
-  const hairs = ["#1d1712", "#2f2118", "#4a2e1c", "#11100f", "#6b5a44"];
-  const shirts = ["#3b6ea5", "#4f7d54", "#8a4b4b", "#5b5b8a", "#2f6f6f"];
-  const accents = ["#d8ff3e", "#ff6b3d", "#7ad0ff", "#ffd166", "#c084fc"];
-  return {
-    background: "#111715",
-    skin: skins[hash % skins.length] ?? skins[0]!,
-    hair: hairs[(hash >>> 3) % hairs.length] ?? hairs[0]!,
-    shirt: shirts[(hash >>> 6) % shirts.length] ?? shirts[0]!,
-    accent: accents[(hash >>> 9) % accents.length] ?? accents[0]!,
-  };
-}
-
-function shade(hex: string, amount: number): string {
-  const value = hex.replace("#", "");
-  const channels = [0, 2, 4].map((offset) =>
-    Math.max(
-      0,
-      Math.min(255, Number.parseInt(value.slice(offset, offset + 2), 16) + amount),
-    ),
-  );
-  return `#${channels
-    .map((channel) => channel.toString(16).padStart(2, "0"))
-    .join("")}`;
-}
-
-/**
- * Mock determinista de 24×24. Genera un avatar pixel art cuyo atuendo y
- * accesorio cambian con la ocupación. La misma ocupación produce siempre la
- * misma imagen, así que se puede cachear por clave.
- */
-export function pixelArtFor(occupation: string): OccupationImage {
-  const hash = hashOf(savedKey(occupation) || occupation);
-  const palette = paletteFor(hash);
-  const kind = occupationKind(occupation);
-  const pixels = new Map<string, string>();
-
-  const plot = (x: number, y: number, color: string) => {
-    if (x < 0 || y < 0 || x > 23 || y > 23) return;
-    pixels.set(`${x},${y}`, color);
-  };
-  const rect = (x: number, y: number, w: number, h: number, color: string) => {
-    for (let row = y; row < y + h; row += 1) {
-      for (let col = x; col < x + w; col += 1) plot(col, row, color);
-    }
-  };
-
-  // Fondo: el SVG raíz ya lo pinta. No se repite píxel a píxel.
-  rect(0, 18, 24, 6, shade(palette.background, 8));
-
-  // Hombros y torso.
-  rect(5, 14, 14, 8, palette.shirt);
-  rect(7, 13, 10, 2, palette.shirt);
-  rect(11, 15, 2, 6, shade(palette.shirt, -26));
-
-  // Cabeza, pelo y cuello.
-  rect(9, 5, 6, 7, palette.skin);
-  rect(8, 3, 8, 3, palette.hair);
-  plot(8, 5, palette.hair);
-  plot(15, 5, palette.hair);
-  plot(9, 12, palette.skin);
-  plot(14, 12, palette.skin);
-  plot(10, 7, "#1b1b1b");
-  plot(13, 7, "#1b1b1b");
-  plot(11, 10, shade(palette.skin, -30));
-
-  switch (kind) {
-    case "health":
-      rect(6, 14, 12, 8, "#f3efe4");
-      rect(11, 16, 2, 5, "#c94b4b");
-      rect(9, 18, 6, 2, "#c94b4b");
-      break;
-    case "law":
-      rect(5, 14, 14, 8, "#1c1c1f");
-      rect(10, 14, 4, 2, "#f3efe4");
-      rect(11, 16, 2, 5, "#f3efe4");
-      break;
-    case "security":
-      rect(5, 14, 14, 8, "#2b4a6f");
-      rect(7, 16, 2, 2, palette.accent);
-      rect(16, 14, 1, 5, palette.accent);
-      break;
-    case "education":
-      rect(5, 14, 14, 8, palette.shirt);
-      rect(14, 17, 4, 3, "#f3efe4");
-      rect(15, 18, 2, 1, palette.accent);
-      break;
-    case "tech":
-      rect(5, 14, 14, 8, shade(palette.shirt, -18));
-      rect(6, 18, 12, 3, "#0b0f0e");
-      rect(7, 19, 10, 1, palette.accent);
-      break;
-    case "business":
-      rect(5, 14, 14, 8, "#21252b");
-      rect(10, 14, 4, 2, "#f3efe4");
-      rect(11, 16, 2, 5, palette.accent);
-      break;
-    case "politics":
-      rect(5, 14, 14, 8, "#2b2b33");
-      rect(5, 16, 14, 2, palette.accent);
-      rect(11, 14, 2, 8, "#f3efe4");
-      break;
-    case "art": {
-      rect(5, 14, 14, 8, palette.shirt);
-      rect(8, 2, 8, 2, shade(palette.hair, 18));
-      rect(7, 4, 2, 1, shade(palette.hair, 18));
-      const dots: Array<[number, number, string]> = [
-        [15, 17, "#ff6b3d"],
-        [17, 18, "#d8ff3e"],
-        [16, 20, "#7ad0ff"],
-      ];
-      for (const [x, y, color] of dots) plot(x, y, color);
-      break;
-    }
-    case "sport":
-      rect(5, 14, 14, 8, palette.accent);
-      rect(11, 15, 2, 6, shade(palette.accent, -60));
-      rect(9, 14, 6, 1, "#f3efe4");
-      break;
-    default:
-      rect(5, 14, 14, 8, palette.shirt);
-      rect(11, 15, 2, 5, shade(palette.shirt, -30));
-      break;
-  }
-
-  // Borde inferior para asentar la figura.
-  rect(5, 22, 14, 1, shade(palette.background, 20));
-
-  const body = [...pixels.entries()]
-    .sort(([a], [b]) => {
-      const [ax, ay] = a.split(",").map(Number);
-      const [bx, by] = b.split(",").map(Number);
-      return (ay ?? 0) - (by ?? 0) || (ax ?? 0) - (bx ?? 0);
-    })
-    .map(([key, color]) => {
-      const [x, y] = key.split(",");
-      return `<rect x="${x}" y="${y}" width="1" height="1" fill="${color}"/>`;
-    })
-    .join("");
-
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="96" height="96" shape-rendering="crispEdges" role="img" aria-label="${escapeXml(
-    occupation || "Ocupación",
-  )}"><rect width="24" height="24" fill="${palette.background}"/>${body}</svg>`;
-
-  return {
-    mime: "image/svg+xml; charset=utf-8",
-    width: 24,
-    height: 24,
-    bytes: new TextEncoder().encode(svg).buffer as ArrayBuffer,
-  };
-}
-
-function escapeXml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-export function imageProvider(env: {
-  IMAGE_PROVIDER?: string;
-  IMAGE_MODEL?: string;
-}): { provider: string; model: string } {
-  return {
-    provider: env.IMAGE_PROVIDER?.trim() || "mock",
-    model: env.IMAGE_MODEL?.trim() || "meta/muse-image",
-  };
-}
-
-/** Por ahora todo se resuelve con el mock; el proveedor real se conecta aquí. */
-export function generateOccupationImage(
-  env: { IMAGE_PROVIDER?: string; IMAGE_MODEL?: string },
-  occupation: string,
-): OccupationImage {
-  const config = imageProvider(env);
-  if (config.provider === "mock") return pixelArtFor(occupation);
-  // La interfaz ya está lista para OpenRouter/Meta; hasta conectar el
-  // proveedor real se mantiene el mock determinista.
-  return pixelArtFor(occupation);
 }

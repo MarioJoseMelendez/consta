@@ -27,10 +27,14 @@ import {
   investigateIdentityConnections,
   requestExtraIdentitySearch,
 } from "./identity";
+import { saveIdentityAnalysis } from "./db";
 import {
+  personOccupationsFromCandidates,
+  personOccupationsFromEntities,
+  photoKindOf,
+  queueOccupationImages,
   resolveOccupationImage,
-  saveIdentityAnalysis,
-} from "./db";
+} from "./occupationImage";
 
 interface Bindings {
   ENVIRONMENT?: string;
@@ -136,6 +140,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function waitUntil(c: AppContext, task: Promise<unknown>): void {
+  try {
+    c.executionCtx.waitUntil(task);
+  } catch {
+    void task;
+  }
+}
+
+function enqueuePersonOccupationImages(
+  c: AppContext,
+  occupations: readonly string[],
+): void {
+  if (occupations.length === 0) return;
+  waitUntil(c, queueOccupationImages(c.env.DB, c.env, occupations));
+}
+
+function requestPhotoKind(name: string, kindParam: string | undefined): string {
+  const explicit = kindParam?.trim();
+  if (explicit) return explicit;
+  return photoKindOf(undefined, name) === "enterprise" ? "enterprise" : "person";
+}
+
 function readId(raw: string | undefined, param: string): ParamResult {
   const value = raw?.trim();
   if (!value) {
@@ -225,7 +251,15 @@ app.use(
     },
     allowMethods: ["GET", "POST", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization"],
-    exposeHeaders: ["X-Consta-Demo", "X-Consta-Channel", "X-Consta-Fallback"],
+    exposeHeaders: [
+      "X-Consta-Demo",
+      "X-Consta-Channel",
+      "X-Consta-Fallback",
+      "X-Image-Cached",
+      "X-Image-Pending",
+      "X-Image-Placeholder",
+      "X-Image-Occupation",
+    ],
     maxAge: 86400,
   }),
 );
@@ -235,7 +269,7 @@ app.get("/", (c) =>
     service: SERVICE_NAME,
     version: SERVICE_VERSION,
     description:
-      "API de Consta para investigación de registros públicos. Las rutas de entidades y análisis están en modo demo. POST /identity/investigate, /identity/more y /identity/connections consultan fuentes públicas y no envían X-Consta-Demo. POST /identity/analysis guarda la investigación en la base compartida y GET /occupation-image sirve el pixel art de una ocupación.",
+      "API de Consta para investigación de registros públicos. Las rutas de entidades y análisis están en modo demo. POST /identity/investigate, /identity/more y /identity/connections consultan fuentes públicas y no envían X-Consta-Demo. POST /identity/analysis guarda la investigación en la base compartida y GET /occupation-image sirve el pixel art de una ocupación o el placeholder persona/empresa.",
     demo: true,
     links: {
       manifest: "/manifest",
@@ -585,6 +619,7 @@ app.post("/identity/investigate", async (c) => {
     return c.json(apiError(result.error.code, result.error.message, result.error.retryable), status);
   }
 
+  enqueuePersonOccupationImages(c, personOccupationsFromCandidates(result.candidates));
   return c.json(result, result.error ? 502 : 200);
 });
 
@@ -659,6 +694,7 @@ app.post("/identity/more", async (c) => {
   if (result.error?.code === "extra_limit") {
     return c.json(apiError(result.error.code, result.error.message), 400);
   }
+  enqueuePersonOccupationImages(c, personOccupationsFromCandidates(result.candidates));
   return c.json(result, result.error ? 502 : 200);
 });
 
@@ -790,6 +826,10 @@ app.post("/identity/connections", async (c) => {
     );
   }
 
+  enqueuePersonOccupationImages(c, [
+    ...personOccupationsFromEntities(result.claims.flatMap((claim) => claim.entities)),
+    ...personOccupationsFromEntities(result.rounds.flatMap((round) => round.entities)),
+  ]);
   return c.json(result, result.error ? 502 : 200);
 });
 
@@ -902,7 +942,7 @@ app.post("/identity/analysis", async (c) => {
   }
 });
 
-/** Sirve una imagen pixel art. El caché es inmutable: la clave es el cargo. */
+/** Sirve una imagen pixel art. Solo las fotos ya guardadas son inmutables. */
 function occupationImageResponse(
   image: {
     mime: string;
@@ -910,20 +950,33 @@ function occupationImageResponse(
     height: number;
     bytes: ArrayBuffer;
   },
-  meta?: { occupation?: string; cached?: boolean },
+  meta?: {
+    occupation?: string;
+    cached?: boolean;
+    pending?: boolean;
+    placeholder?: string | null;
+  },
 ): Response {
+  const pending = meta?.pending === true;
   const headers: Record<string, string> = {
     "content-type": image.mime,
-    "cache-control": "public, max-age=31536000, immutable",
+    "cache-control": pending
+      ? "no-store"
+      : "public, max-age=31536000, immutable",
     "x-image-width": String(image.width),
     "x-image-height": String(image.height),
   };
-  // Ayuda a comprobar en desarrollo qué cargo se reutilizó y si vino del caché.
   if (meta?.occupation) {
     headers["x-image-occupation"] = encodeURIComponent(meta.occupation);
   }
   if (meta?.cached !== undefined) {
     headers["x-image-cached"] = meta.cached ? "1" : "0";
+  }
+  if (meta?.pending !== undefined) {
+    headers["x-image-pending"] = pending ? "1" : "0";
+  }
+  if (meta?.placeholder) {
+    headers["x-image-placeholder"] = meta.placeholder;
   }
   return new Response(image.bytes, { status: 200, headers });
 }
@@ -940,17 +993,28 @@ app.get("/occupation-image", async (c) => {
     );
   }
 
-  const resolved = await resolveOccupationImage(c.env.DB, c.env, name);
+  const kind = requestPhotoKind(name, c.req.query("kind"));
+  const resolved = await resolveOccupationImage(c.env.DB, c.env, name, {
+    kind,
+    waitUntil: (task) => waitUntil(c, task),
+  });
   if (!resolved) {
     return c.json(
       apiError("invalid_parameter", '"name" no contiene una ocupación válida.'),
       400,
     );
   }
-  return occupationImageResponse(resolved.image, {
+
+  const meta = {
     occupation: resolved.occupation,
     cached: resolved.cached,
-  });
+    pending: resolved.pending,
+    placeholder: resolved.placeholder,
+  };
+  if (c.req.query("meta") === "1") {
+    return c.json(meta);
+  }
+  return occupationImageResponse(resolved.image, meta);
 });
 
 app.notFound((c) =>
