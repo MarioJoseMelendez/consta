@@ -2600,6 +2600,40 @@ const ENTITY_STOPWORDS = new Set([
   "and",
 ]);
 
+/** "Joe" no es prefijo de "Joseph"; el mapa perdería a Biden sin estos alias. */
+const GIVEN_ALIASES: Record<string, readonly string[]> = {
+  joseph: ["joe"],
+  jose: ["pepe"],
+  william: ["will", "bill", "billy", "liam"],
+  robert: ["rob", "bob", "bobby"],
+  richard: ["rick", "rich"],
+  john: ["jack", "johnny"],
+  michael: ["mike"],
+  alexander: ["alex"],
+  francisco: ["paco", "pancho", "fran"],
+  james: ["jim", "jimmy", "jaime"],
+  charles: ["chuck", "charlie"],
+  thomas: ["tom", "tommy"],
+  christopher: ["chris"],
+  antonio: ["tono", "tony"],
+  elizabeth: ["liz", "beth"],
+};
+
+function givenNameHit(body: string, given: string): boolean {
+  if (body.includes(given)) return true;
+  const words = body.split(" ");
+  if (
+    words.some(
+      (word) =>
+        word.length >= 3 && (given.startsWith(word) || word.startsWith(given)),
+    )
+  ) {
+    return true;
+  }
+  const aliases = GIVEN_ALIASES[given] ?? [];
+  return aliases.some((alias) => words.includes(alias) || body.includes(alias));
+}
+
 /**
  * Las fuentes nombran a la persona con menos palabras que la entidad
  * ("Germán Ávila" por "Germán Ávila Plazas"). Exigir el nombre completo
@@ -2626,12 +2660,13 @@ export function mentionsEntity(
     .split(" ")
     .filter((token) => token.length >= 3 && !ENTITY_STOPWORDS.has(token));
   if (tokens.length === 0) return false;
-  const hits = tokens.filter((token) => body.includes(token));
-  if (tokens.length === 1) return hits.length === 1;
-  // El ancla es el primer apellido cuando el nombre tiene tres palabras o
-  // más, y el apellido único cuando solo hay dos ("José Ramírez").
-  const anchor = tokens.length >= 3 ? tokens[1] : tokens[tokens.length - 1];
-  return hits.length >= 2 && hits.includes(anchor);
+  if (tokens.length === 1) return body.includes(tokens[0]);
+
+  const given = tokens[0];
+  const surname = tokens[tokens.length - 1];
+  const firstSurname = tokens.length >= 3 ? tokens[1] : surname;
+  if (!givenNameHit(body, given)) return false;
+  return body.includes(surname) || body.includes(firstSurname);
 }
 
 function readConnectionClaimEntities(
@@ -2966,6 +3001,7 @@ function buildConnectionClaimsPrompt(input: {
     "Si además la fuente une B con el sujeto, escríbelo en otra afirmación que nombre al sujeto y la relación.",
     "Si la fuente solo conecta dos identidades entre sí, no atribuyas esa relación al sujeto: la rama queda abierta.",
     "Si la fuente nombra partido, fondeo, empresa asociada o apoyo externo, escríbelo como afirmación con origen y destino.",
+    "Incluye las afirmaciones que las fuentes respalden aunque no coincidan con el interés de investigación. El interés no filtra lo que se afirma.",
   );
   if (branch) {
     lines.push(
@@ -3006,7 +3042,7 @@ const CONNECTION_PLAN_SYSTEM = [
   "Diccionario de herramientas. Usa solo estas. No inventes una tercera:",
   IDENTITY_TOOLS_JSON,
   "Hay tres tiempos en el mismo loop. La vuelta 1 solo busca conexiones directas del sujeto. La vuelta 2 busca un salto más desde esas identidades. La vuelta 3, si hay ramas abiertas con nombres concretos, solo cruza esos nombres con el sujeto. No mezcles los tres tiempos.",
-  "En cada vuelta busca conexiones de interés público: partidos, fondeo, empresas asociadas, apoyo externo. Si el periodista escribió un interés de investigación, priorízalo.",
+  "En cada vuelta busca conexiones de interés público: partidos, fondeo, empresas asociadas, apoyo externo. Si el periodista escribió un interés de investigación, priorízalo al elegir consultas, no para omitir lo que las fuentes ya respaldan.",
   "Si el mensaje nombra una rama elegida por el periodista, ignora el tiempo de la ronda y sigue solo esa rama, con el mismo foco de interés público.",
   "Sigue las instrucciones de la ronda en el mensaje del usuario.",
   "Una relación entre dos identidades no es una relación con el sujeto. Si la fuente no une la última conexión con el sujeto, la rama queda abierta.",
@@ -3025,6 +3061,7 @@ const CONNECTION_ENTITY_SYSTEM = [
   "Incluye personas y organizaciones que la afirmación necesite para conectar al sujeto con alguien más: familiares, socios, funcionarios, empresas, ministerios.",
   "Incluye también partidos, fondos, empresas asociadas, organismos de apoyo y las personas que los representen, cuando la fuente los nombre.",
   "Incluye también las entidades que aparecen conectadas con otra entidad ya conocida, aunque la fuente no las una al sujeto.",
+  "El interés de investigación solo orientó las búsquedas. Incluye toda entidad que las fuentes nombren, aunque no coincida con ese interés.",
   "Cada entidad lleva id, label, type, description, occupation e indexes. type es person o enterprise; occupation es un solo cargo principal que la fuente nombre o null; indexes cita los números de las fuentes.",
   'Devuelve solo el JSON con entities: {"entities":[...]}. Si no hay entidades distintas al sujeto, entities es [].',
 ].join("\n");
@@ -3041,6 +3078,7 @@ const CONNECTION_CLAIM_SYSTEM = [
   "Cada claim debe dejar claro el origen y el destino de la relación. No atribuyas al sujeto una relación que la fuente solo afirma entre otras dos personas.",
   "Si la fuente une dos identidades entre sí y no con el sujeto, escríbelo así: la cadena queda abierta.",
   "Si la fuente cierra esa cadena con el sujeto, redacta otra afirmación que nombre al sujeto y la relación; esa es la conexión que se busca.",
+  "El interés de investigación solo orientó las búsquedas. Incluye toda afirmación que las fuentes respalden, aunque no coincida con ese interés. El interés no filtra claims ni entidades.",
   "Si no hay fuentes, claims es [].",
   "Devuelve solo el JSON con claims.",
 ].join("\n");

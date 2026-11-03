@@ -185,6 +185,19 @@ function samePersonLabel(left: string, right: string, subjectLabel: string): boo
  * La fuente puede nombrar al sujeto solo con el apellido. Se replica el
  * anclaje del backend: nombre completo o dos palabras con el primer apellido.
  */
+const GIVEN_ALIASES: Record<string, readonly string[]> = {
+  joseph: ["joe"],
+  jose: ["pepe"],
+  william: ["will", "bill", "billy"],
+  robert: ["rob", "bob"],
+  michael: ["mike"],
+  alexander: ["alex"],
+  francisco: ["paco", "fran"],
+  james: ["jim", "jaime"],
+  thomas: ["tom"],
+  christopher: ["chris"],
+};
+
 function mentionsLabel(text: string, label: string): boolean {
   const body = normalizeClaimText(text);
   const target = normalizeClaimText(label);
@@ -192,9 +205,20 @@ function mentionsLabel(text: string, label: string): boolean {
   if (body.includes(target)) return true;
   const tokens = target.split(" ").filter((token) => token.length >= 3);
   if (tokens.length === 0) return false;
-  const hits = tokens.filter((token) => body.includes(token));
-  const anchor = tokens.length >= 3 ? tokens[1] : tokens[tokens.length - 1];
-  return hits.length >= 2 && hits.includes(anchor);
+  if (tokens.length === 1) return body.includes(tokens[0]);
+  const given = tokens[0];
+  const surname = tokens[tokens.length - 1];
+  const firstSurname = tokens.length >= 3 ? tokens[1] : surname;
+  const words = body.split(" ");
+  const givenHit =
+    body.includes(given) ||
+    words.some(
+      (word) =>
+        word.length >= 3 && (given.startsWith(word) || word.startsWith(given)),
+    ) ||
+    (GIVEN_ALIASES[given] ?? []).some((alias) => words.includes(alias));
+  if (!givenHit) return false;
+  return body.includes(surname) || body.includes(firstSurname);
 }
 
 /**
@@ -355,9 +379,46 @@ function findNodeByLabel(
   );
 }
 
+function addEntityNode(
+  nodes: GraphNode[],
+  entity: IdentityEntity,
+  subjectLabel: string,
+  claim: IdentityClaim | null,
+  round: number,
+): GraphNode | null {
+  if (!entity.label || sameLabel(entity.label, subjectLabel)) return null;
+  let node = findNodeByLabel(nodes, entity.label, subjectLabel);
+  if (!node) {
+    node = {
+      id: entityKey(entity),
+      label: entity.label || entity.description || "Unnamed",
+      type: entity.type,
+      description: entity.description,
+      occupation: entity.occupation ?? null,
+      round,
+      sources: uniqueSources(entity.sources),
+      claims: claim ? [claim] : [],
+      profile: entity.profile ?? null,
+      isSubject: false,
+    };
+    nodes.push(node);
+    return node;
+  }
+  node.round = Math.min(node.round, round);
+  node.sources = uniqueSources([...node.sources, ...entity.sources]);
+  if (!node.description && entity.description) node.description = entity.description;
+  if (!node.occupation && entity.occupation) node.occupation = entity.occupation;
+  if (!node.profile && entity.profile) node.profile = entity.profile;
+  if (claim && !node.claims.some((item) => item.id === claim.id)) {
+    node.claims.push(claim);
+  }
+  return node;
+}
+
 function buildGraph(
   claims: readonly IdentityClaim[],
   candidate?: IdentityCandidate | null,
+  rounds: readonly IdentityConnectionRound[] = [],
 ): Graph {
   const subject = subjectOf(claims, candidate);
   const nodes: GraphNode[] = [subject];
@@ -365,38 +426,27 @@ function buildGraph(
     (left, right) => left.round - right.round || left.id.localeCompare(right.id),
   );
 
+  for (const round of rounds) {
+    for (const entity of uniqueEntities([...round.entities], subject.label)) {
+      const linked = sorted.find(
+        (claim) =>
+          claim.id !== "root" &&
+          (claim.round === round.round || mentionsLabel(claim.text, entity.label)),
+      );
+      addEntityNode(nodes, entity, subject.label, linked ?? null, round.round);
+    }
+  }
+
   for (const claim of sorted) {
     if (claim.id === "root") continue;
     for (const entity of uniqueEntities([...claim.entities], subject.label)) {
-      if (sameLabel(entity.label, subject.label)) continue;
-      let node = findNodeByLabel(nodes, entity.label, subject.label);
-      if (!node) {
-        node = {
-          id: entityKey(entity),
-          label: entity.label || entity.description || "Unnamed",
-          type: entity.type,
-          description: entity.description,
-          occupation: entity.occupation ?? null,
-          round: claim.round,
-          sources: uniqueSources(entity.sources),
-          claims: [claim],
-          profile: entity.profile ?? null,
-          isSubject: false,
-        };
-        nodes.push(node);
-      } else {
-        node.round = Math.min(node.round, claim.round);
-        node.sources = uniqueSources([...node.sources, ...entity.sources]);
-        if (!node.description && entity.description) {
-          node.description = entity.description;
-        }
-        if (!node.occupation && entity.occupation) {
-          node.occupation = entity.occupation;
-        }
-        if (!node.profile && entity.profile) node.profile = entity.profile;
-        if (!node.claims.some((item) => item.id === claim.id)) {
-          node.claims.push(claim);
-        }
+      addEntityNode(nodes, entity, subject.label, claim, claim.round);
+    }
+    for (const node of nodes) {
+      if (node.isSubject) continue;
+      if (!mentionsLabel(claim.text, node.label)) continue;
+      if (!node.claims.some((item) => item.id === claim.id)) {
+        node.claims.push(claim);
       }
     }
   }
@@ -450,9 +500,17 @@ function buildGraph(
     const shared = node.claims.filter(
       (claim) => !subject.label || mentionsLabel(claim.text, subject.label),
     );
-    if (shared.length === 0) continue;
+    const hang =
+      shared.length > 0
+        ? shared
+        : node.claims.filter(
+            (claim) =>
+              claim.parentId === "root" ||
+              (!claim.parentId && claim.round === 1),
+          );
+    if (hang.length === 0) continue;
     const relation =
-      shared
+      hang
         .map((claim) => relationFor(claim.text, node.label))
         .find((value) => value) ?? "";
     const edge: GraphEdge = {
@@ -463,7 +521,7 @@ function buildGraph(
       toLabel: node.label,
       relation,
       kind: "subject",
-      claims: shared,
+      claims: hang,
     };
     byPair.set(key, edge);
     edges.push(edge);
@@ -824,7 +882,10 @@ export default function ClaimsWeb({
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
 
-  const graph = useMemo(() => buildGraph(claims, confirmed), [claims, confirmed]);
+  const graph = useMemo(
+    () => buildGraph(claims, confirmed, rounds),
+    [claims, confirmed, rounds],
+  );
   const map = useMemo(() => toMapGraph(graph), [graph]);
   const subject = graph.nodes.find((node) => node.isSubject) ?? null;
   const subjectLabel = subject?.label ?? "";

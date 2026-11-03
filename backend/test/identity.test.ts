@@ -70,6 +70,25 @@ test("no confunde apellidos distintos", () => {
   assert.equal(mentionsEntity("Habla Ricardo Bonilla.", "Germán Ávila", subject), false);
 });
 
+test("Joe Biden nombra a Joseph Robinette Biden Jr.", () => {
+  assert.equal(
+    mentionsEntity(
+      "Joe Biden se reunió con Sam Altman en la Casa Blanca.",
+      "Joseph Robinette Biden Jr.",
+      "Sam Altman",
+    ),
+    true,
+  );
+  assert.equal(
+    mentionsEntity(
+      "Elon Musk visitó OpenAI.",
+      "Elon Musk",
+      "Sam Altman",
+    ),
+    true,
+  );
+});
+
 function entity(label: string, type: IdentityEntity["type"] = "person"): IdentityEntity {
   return {
     id: label.toLowerCase().replace(/\s+/g, "-"),
