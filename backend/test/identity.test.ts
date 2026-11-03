@@ -17,6 +17,7 @@ import {
   connectionRoundBeat,
   journalistInterestNote,
   mentionsEntity,
+  pickSingleOccupation,
 } from "../src/identity.ts";
 
 const subject = "Gustavo Petro";
@@ -172,4 +173,25 @@ test("journalistInterestNote: el foco del periodista manda, sin ser evidencia", 
   assert.match(note, /contratos con el Ministerio de Salud/);
   assert.match(note, /no es evidencia/);
   assert.match(note, /interés público/);
+});
+
+test("pickSingleOccupation: un cargo ya guardado no se reemplaza por una lista", () => {
+  assert.equal(
+    pickSingleOccupation("CEO, fundador y presidente", "CEO"),
+    "CEO",
+  );
+  assert.equal(
+    pickSingleOccupation(["CEO", "fundador", "presidente"], "Ingeniero"),
+    "Ingeniero",
+  );
+});
+
+test("pickSingleOccupation: sin cargo guardado elige uno solo", () => {
+  assert.equal(
+    pickSingleOccupation("Médico, político y empresario"),
+    "Médico",
+  );
+  assert.equal(pickSingleOccupation("CEO"), "CEO");
+  assert.equal(pickSingleOccupation("null"), null);
+  assert.equal(pickSingleOccupation(["", "none"]), null);
 });

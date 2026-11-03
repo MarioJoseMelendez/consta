@@ -51,7 +51,12 @@ import {
   type GeneralError,
 } from "./generalFuncs";
 import { confidenceForScore, scoreResults, type ResultToScore } from "./sourceScore";
-import { searchSavedClaims } from "./db";
+import {
+  occupationCandidates,
+  readOccupationImage,
+  savedKey,
+  searchSavedClaims,
+} from "./db";
 
 export const IDENTITY_NAME_MAX = 200;
 export const IDENTITY_DETAILS_MAX = 2000;
@@ -356,8 +361,60 @@ function readLooseValue(value: unknown): string | null {
 }
 
 function readOccupation(value: unknown): string | null {
-  const occupation = clip(value, 120);
-  return occupation && !isEmptyFieldValue(occupation) ? occupation : null;
+  return pickSingleOccupation(value);
+}
+
+/**
+ * Un cargo, no una lista. Si ya hay uno guardado en el perfil, se conserva;
+ * si la fuente nombra varios, se toma el primero que no sea la lista completa.
+ */
+export function pickSingleOccupation(
+  value: unknown,
+  preferred?: string | null,
+): string | null {
+  const stored = collapseOccupationList(preferred);
+  if (stored) return stored;
+  return collapseOccupationList(occupationTextOf(value));
+}
+
+function occupationTextOf(value: unknown): string | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return clip(String(value), 120);
+  }
+  if (typeof value === "string") {
+    const text = clip(value, 120);
+    return text && !isEmptyFieldValue(text) ? text : null;
+  }
+  if (!Array.isArray(value)) return null;
+  const parts = value
+    .map((item) => clip(item, 80))
+    .filter(
+      (item): item is string => item !== null && !isEmptyFieldValue(item),
+    );
+  if (parts.length === 0) return null;
+  return clip(parts.join(", "), 120);
+}
+
+function collapseOccupationList(value: string | null | undefined): string | null {
+  if (!value || isEmptyFieldValue(value)) return null;
+  const parts = occupationCandidates(value);
+  if (parts.length === 0) return clip(value, 120);
+  const fullKey = savedKey(value);
+  return parts.find((part) => savedKey(part) !== fullKey) ?? parts[0] ?? null;
+}
+
+async function preferStoredOccupation(
+  env: GeneralEnv,
+  value: string | null,
+): Promise<string | null> {
+  const picked = pickSingleOccupation(value);
+  if (!picked) return null;
+  const parts = occupationCandidates(value ?? picked);
+  for (const part of parts) {
+    const cached = await readOccupationImage(env.DB, part);
+    if (cached) return part;
+  }
+  return picked;
 }
 
 function emptyResult(
@@ -669,6 +726,9 @@ function normalizeField(
 
   if (key === "type" && fieldValue) {
     fieldValue = canonicalizeType(fieldValue);
+  }
+  if (key === "occupation" && fieldValue) {
+    fieldValue = pickSingleOccupation(fieldValue);
   }
   if (key === "aliases" && fieldValue && !isShortAlias(fieldValue)) {
     return notFoundField(key);
@@ -1357,18 +1417,23 @@ function sourcedField(
     if (sources.length === 5) break;
   }
   if (sources.length === 0) return null;
+  const occupation =
+    key === "occupation" ? pickSingleOccupation(entries[0]?.value) : null;
   const value =
-    entries.length === 1
+    occupation ??
+    (entries.length === 1
       ? entries[0].value
       : entries
           .map((entry) => entry.value)
           .join(" · ")
-          .slice(0, 500);
+          .slice(0, 500));
+  if (!value) return null;
   return {
     key,
     label: identityFieldLabel(key),
     value,
-    status: entries.length === 1 ? "found" : "conflicting",
+    status:
+      occupation || entries.length === 1 ? "found" : "conflicting",
     sources,
     note: null,
     score: null,
@@ -1793,39 +1858,52 @@ async function applyResultScores(
   });
   const byUrl = new Map(scored.map((item) => [item.url, item]));
 
-  return candidates.map((candidate) => ({
-    ...candidate,
-    fields: candidate.fields.map((field) => {
-      if (field.status === "not_found" || !field.value?.trim()) {
-        return { ...field, score: null, confidence: null };
-      }
-      const sources = field.sources.map((source) => {
-        const match = byUrl.get(source.url);
-        if (!match) return source;
-        return {
-          ...source,
-          tier: match.tier,
-          official: match.official,
-          repetition: match.repetition,
-          score: match.score,
-          confidence: match.confidence,
-        };
-      });
-      const scores = sources
-        .map((source) => source.score)
-        .filter((score): score is number => typeof score === "number");
-      let score = scores.length > 0 ? Math.max(...scores) : 1;
-      if (field.status === "alleged" || field.status === "conflicting") {
-        score = Math.min(score, 70);
-      }
-      return {
-        ...field,
-        sources,
-        score,
-        confidence: confidenceForScore(score),
-      };
-    }),
-  }));
+  return Promise.all(
+    candidates.map(async (candidate) => ({
+      ...candidate,
+      fields: await Promise.all(
+        candidate.fields.map(async (field) => {
+          if (field.status === "not_found" || !field.value?.trim()) {
+            return { ...field, score: null, confidence: null };
+          }
+          const occupation =
+            field.key === "occupation"
+              ? await preferStoredOccupation(env, field.value)
+              : field.value;
+          const sources = field.sources.map((source) => {
+            const match = byUrl.get(source.url);
+            if (!match) return source;
+            return {
+              ...source,
+              tier: match.tier,
+              official: match.official,
+              repetition: match.repetition,
+              score: match.score,
+              confidence: match.confidence,
+            };
+          });
+          const scores = sources
+            .map((source) => source.score)
+            .filter((score): score is number => typeof score === "number");
+          let score = scores.length > 0 ? Math.max(...scores) : 1;
+          if (field.status === "alleged" || field.status === "conflicting") {
+            score = Math.min(score, 70);
+          }
+          return {
+            ...field,
+            value: occupation ?? field.value,
+            status:
+              field.key === "occupation" && occupation
+                ? "found"
+                : field.status,
+            sources,
+            score,
+            confidence: confidenceForScore(score),
+          };
+        }),
+      ),
+    })),
+  );
 }
 
 function extraCount(rounds: IdentityRound[]): number {
