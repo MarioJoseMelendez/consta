@@ -445,6 +445,18 @@ function modelCallOptions(env: GeneralEnv, maxTokens: number) {
   };
 }
 
+/** Una vuelta de conexiones no puede encadenar tres modelos con reintento: el worker se queda mudo. */
+function connectionModelCallOptions(env: GeneralEnv, maxTokens: number) {
+  return {
+    models: identityModels(env).slice(0, 2),
+    temperature: 0.1,
+    maxTokens,
+    timeoutMs: 25_000,
+    retries: 0,
+    retryDelayMs: 0,
+  };
+}
+
 function logModelFailure(
   stage: string,
   attempts: Array<{ provider?: string; model: string; code?: string }>,
@@ -522,6 +534,44 @@ async function parseModelJson(
     };
   }
 
+  return { ok: true, value: repaired };
+}
+
+async function parseConnectionJson(
+  env: GeneralEnv,
+  text: string,
+  maxTokens: number,
+): Promise<{ ok: true; value: unknown } | { ok: false; error: GeneralError }> {
+  const parsed = tryParseJson(text);
+  if (parsed !== null) return { ok: true, value: parsed };
+
+  const repair = await callOpenRouter(
+    env,
+    [
+      { role: "system", content: REPAIR_SYSTEM },
+      { role: "user", content: text.slice(0, 14_000) },
+    ],
+    { ...connectionModelCallOptions(env, maxTokens), temperature: 0 },
+  );
+  if (!repair.ok) {
+    return {
+      ok: false,
+      error: repair.error ?? {
+        code: "invalid_model_json",
+        message: "No se pudo reparar el JSON del modelo.",
+      },
+    };
+  }
+  const repaired = tryParseJson(repair.text);
+  if (repaired === null) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_model_json",
+        message: "El modelo no devolvió un objeto JSON utilizable.",
+      },
+    };
+  }
   return { ok: true, value: repaired };
 }
 
@@ -2351,7 +2401,21 @@ function summaryLine(value: unknown): string | null {
   return null;
 }
 
-/** Lee el JSON del resumen; `findings` puede llegar como lista o como texto. */
+function fallbackConnectionSummary(
+  who: string,
+  claims: readonly IdentityClaim[],
+): IdentitySummary {
+  const sourced = claims.filter((claim) => claim.id !== "root");
+  const lines = sourced.slice(0, 6).map((claim) => claim.text);
+  const findings = lines.join(" ") || "Todavía no hay afirmaciones probables.";
+  return {
+    who,
+    findings,
+    text: `${who} ${findings}`.trim(),
+    claims: sourced.filter((claim) => claim.confidence !== "uncertain").length,
+  };
+}
+
 function readConnectionRoundSummary(value: unknown): IdentitySummary | null {
   const payload =
     isRecord(value) && isRecord(value.summary) ? value.summary : value;
@@ -3168,7 +3232,7 @@ async function runConnectionRound(
         }),
       },
     ],
-    modelCallOptions(env, CONNECTION_PLAN_MAX_TOKENS),
+    connectionModelCallOptions(env, CONNECTION_PLAN_MAX_TOKENS),
   );
 
   if (!planCall.ok) {
@@ -3184,7 +3248,7 @@ async function runConnectionRound(
     };
   }
 
-  const planJson = await parseModelJson(env, planCall.text, CONNECTION_PLAN_MAX_TOKENS);
+  const planJson = await parseConnectionJson(env, planCall.text, CONNECTION_PLAN_MAX_TOKENS);
   if (!planJson.ok) {
     return {
       ...state,
@@ -3249,7 +3313,7 @@ async function runConnectionRound(
         }),
       },
     ],
-    modelCallOptions(env, CONNECTION_ENTITY_MAX_TOKENS),
+    connectionModelCallOptions(env, CONNECTION_ENTITY_MAX_TOKENS),
   );
 
   if (!entityCall.ok) {
@@ -3273,7 +3337,7 @@ async function runConnectionRound(
     };
   }
 
-  const entityJson = await parseModelJson(env, entityCall.text, CONNECTION_ENTITY_MAX_TOKENS);
+  const entityJson = await parseConnectionJson(env, entityCall.text, CONNECTION_ENTITY_MAX_TOKENS);
   if (!entityJson.ok) {
     return {
       ...state,
@@ -3342,7 +3406,7 @@ async function runConnectionRound(
         }),
       },
     ],
-    modelCallOptions(env, CONNECTION_CLAIM_MAX_TOKENS),
+    connectionModelCallOptions(env, CONNECTION_CLAIM_MAX_TOKENS),
   );
 
   if (!claimCall.ok) {
@@ -3366,7 +3430,7 @@ async function runConnectionRound(
     };
   }
 
-  const claimJson = await parseModelJson(env, claimCall.text, CONNECTION_CLAIM_MAX_TOKENS);
+    const claimJson = await parseConnectionJson(env, claimCall.text, CONNECTION_CLAIM_MAX_TOKENS);
   if (!claimJson.ok) {
     return {
       ...state,
@@ -3408,87 +3472,6 @@ async function runConnectionRound(
     };
   }
 
-  const summaryCall = await callOpenRouter(
-    env,
-    [
-      { role: "system", content: CONNECTION_SUMMARY_SYSTEM },
-      {
-        role: "user",
-        content: buildConnectionSummaryPrompt({
-          name,
-          details,
-          interest,
-          who,
-          claims: [...priorClaims, ...claims],
-        }),
-      },
-    ],
-    modelCallOptions(env, CONNECTION_SUMMARY_MAX_TOKENS),
-  );
-
-  if (!summaryCall.ok) {
-    logModelFailure(`conexiones summary ${round}`, summaryCall.attempts, summaryCall.error?.code);
-    return {
-      ...state,
-      rounds: [
-        ...state.rounds,
-        {
-          round,
-          queries,
-          searches,
-          entities,
-          claims,
-          reason: "El resumen no pudo consultar al modelo.",
-          stopped: true,
-        },
-      ],
-      canContinue: false,
-      stoppedReason: "El resumen no pudo completarse.",
-    };
-  }
-
-  const summaryJson = await parseModelJson(env, summaryCall.text, CONNECTION_SUMMARY_MAX_TOKENS);
-  if (!summaryJson.ok) {
-    return {
-      ...state,
-      rounds: [
-        ...state.rounds,
-        {
-          round,
-          queries,
-          searches,
-          entities,
-          claims,
-          reason: "El resumen no llegó en JSON válido.",
-          stopped: true,
-        },
-      ],
-      canContinue: false,
-      stoppedReason: "El resumen no llegó en JSON válido.",
-    };
-  }
-
-  const summary = readConnectionRoundSummary(summaryJson.value);
-  if (!summary) {
-    return {
-      ...state,
-      rounds: [
-        ...state.rounds,
-        {
-          round,
-          queries,
-          searches,
-          entities,
-          claims,
-          reason: "No se pudo leer el resumen.",
-          stopped: true,
-        },
-      ],
-      canContinue: false,
-      stoppedReason: "No se pudo leer el resumen.",
-    };
-  }
-
   const newClaims = claims.filter(
     (claim) =>
       !priorClaims.some(
@@ -3497,8 +3480,11 @@ async function runConnectionRound(
       ),
   );
 
-  const whoText = summary.who || state.summary.who;
   const accumulated = [...priorClaims, ...newClaims];
+  const summary = fallbackConnectionSummary(
+    state.summary.who || who,
+    accumulated,
+  );
   const openCount = connectionBranches(accumulated, subjectLabel).open.length;
   const canContinue = canContinueConnectionLoop({
     finishedRound: round,
@@ -3520,14 +3506,7 @@ async function runConnectionRound(
         stopped: !canContinue,
       },
     ],
-    summary: {
-      who: whoText,
-      findings: summary.findings,
-      text: `${whoText} ${summary.findings}`.trim(),
-      claims: accumulated.filter(
-        (claim) => claim.confidence !== "uncertain",
-      ).length,
-    },
+    summary,
     canContinue,
     stoppedReason: !canContinue
       ? newClaims.length === 0
@@ -3668,6 +3647,7 @@ export async function investigateIdentityConnections(
       error: {
         code: "internal_error",
         message: "La vuelta de conexiones no pudo completarse.",
+        retryable: true,
       },
     };
   }

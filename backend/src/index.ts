@@ -103,6 +103,8 @@ const DEFAULT_ENVIRONMENT = "development";
 const LOCAL_ORIGINS = new Set([
   "http://localhost:3000",
   "http://127.0.0.1:3000",
+  "http://localhost:3001",
+  "http://127.0.0.1:3001",
 ]);
 const PAGES_ORIGIN = /^https:\/\/(?:[a-z0-9-]+\.)*pages\.dev$/i;
 const MAX_QUERY_LENGTH = 200;
