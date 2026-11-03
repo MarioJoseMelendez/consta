@@ -7,7 +7,7 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --import=./test/register.mjs --test test/sourceScore.test.ts test/identity.test.ts test/generalFuncs.test.ts",
+    "test": "node --experimental-strip-types --import=./test/register.mjs --test test/sourceScore.test.ts test/identity.test.ts test/generalFuncs.test.ts test/db.test.ts",
     "build": "wrangler deploy --dry-run --outdir dist"
   },
   "dependencies": {

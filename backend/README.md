@@ -69,6 +69,8 @@ bundle sin publicar. `wrangler dev` carga variables desde `.dev.vars`; usa
 | `POST` | `/identity/investigate` | Investigación de identidad. Acepta `{ name, details?, interest? }` y devuelve `{ plan, rounds, candidates }`. No lleva `X-Consta-Demo`. |
 | `POST` | `/identity/more` | Hasta dos búsquedas extra. Acepta `{ name, details?, interest?, investigation }` y busca NIT, teléfono, correo, representante legal, dirección y documento nacional. |
 | `POST` | `/identity/connections` | Una vuelta del loop de conexiones sobre un candidato confirmado. Acepta `{ name, details?, interest?, investigation, candidateId, connection?, branchContext }` y devuelve `{ claims, rounds, summary, canContinue, stoppedReason }`.
+| `POST` | `/identity/analysis` | Guarda o actualiza un análisis completo en D1. Acepta `{ name, details?, interest?, candidate?, connection }`; es idempotente por hash de contenido y devuelve `{ id, created, claims, entities }`. |
+| `GET` | `/occupation-image?name=` | Pixel art de la ocupación. Se genera una vez, se guarda en D1 y se sirve con caché inmutable. |
 
 ### Ejemplos
 
@@ -233,6 +235,46 @@ producto:
 
 La parada también es anticipada cuando no hay afirmaciones nuevas.
 
+### Base de investigaciones (`bd`)
+
+`bd` es una herramienta más que el modelo puede elegir en el plan, los
+candidatos y las conexiones. No es una fuente: busca en D1 con FTS5 las
+afirmaciones ya guardadas y devuelve cada una con su texto, su nivel de
+corroborancia, su puntaje y sus fuentes originales. Cuando el modelo cita un
+resultado `bd`, el backend lo expande a esas fuentes originales; nunca guarda
+ni muestra un enlace `bd` como evidencia.
+
+`POST /identity/analysis` guarda el sujeto, sus conexiones y sus afirmaciones.
+El `content_hash` hace que reintentar la misma investigación actualice la fila
+existente en lugar de duplicarla. Las afirmaciones sin fuente no se guardan.
+La base es global y compartida, sin autenticación ni visor por ahora.
+
+Migraciones locales:
+
+```bash
+pnpm --filter @consta/backend exec wrangler d1 migrations apply consta --local
+```
+
+La tabla FTS5 (`search_fts`) se llena en cada guardado. Si FTS falla, `bd` cae
+a una búsqueda `LIKE` para no romper la investigación.
+
+### Imágenes por ocupación
+
+`GET /occupation-image?name=Médico` devuelve un SVG pixel art determinista de
+24×24. La misma ocupación produce siempre la misma imagen y se cachea en
+`occupation_images`. El frontend la usa en la foto de la tarjeta y en la ficha
+del sujeto; si no hay ocupación o la imagen falla, cae a las iniciales.
+
+Si la fuente trae varios cargos ("Médico, político y empresario"), el endpoint
+los separa y reutiliza el primero que ya exista en `occupation_images`; solo si
+ninguno está guardado genera la imagen del cargo principal y la guarda con esa
+clave. Así no se crea una imagen nueva por cada lista de cargos.
+
+Hoy el proveedor es `mock` y no hace llamadas externas. La interfaz queda lista
+para `IMAGE_PROVIDER=openrouter` con `IMAGE_MODEL=meta/muse-image` o
+`google/gemini-3.1-flash-lite-image`. En OpenRouter no hay modelos de imagen
+gratuitos: el más barato con endpoint publicado ronda US$0.00003 por imagen.
+
 En la primera llamada, sin `connection`, el backend:
 
 1. Busca el candidato por `candidateId`.
@@ -393,36 +435,45 @@ Opciones: `models`, `temperature`, `maxTokens`, `timeoutMs`, `retries` y
 | `NVIDIA_API_KEY` | API key server-side de NVIDIA NIM, respaldo de OpenRouter. | Vacío: no hay respaldo. |
 | `NVIDIA_BASE_URL` | Base de NVIDIA NIM. | `https://integrate.api.nvidia.com/v1`. |
 | `NVIDIA_MODEL` | Modelo de NVIDIA preferido; si falta, usa lightning y bolt. | Vacío. |
+| `DB` | Binding D1 de la base compartida (`bd` e imágenes). | Configurado en `wrangler.jsonc`. |
+| `IMAGE_PROVIDER` | `mock` (pixel art local) u `openrouter` cuando se conecte. | `mock`. |
+| `IMAGE_MODEL` | Modelo de imagen previsto. | `meta/muse-image`. |
 
 Copia `.dev.vars.example` a `.dev.vars` para desarrollo local. `.dev.vars` está
 ignorado por git.
 
 ## Datos demo
 
-Los datos viven en `packages/contracts/src/demo.ts` y son compartidos con el
+Los datos demo viven en `packages/contracts/src/demo.ts` y son compartidos con el
 frontend. El backend los usa como fallback y, si `GT_DATA_URL` está configurado,
-consume el Channel GT. No hay base de datos ni ingesta propia todavía.
+consume el Channel GT. Las investigaciones reales de identidad se guardan en D1
+con el binding `DB`; los datos demo no se escriben allí.
 
 `POST /analyze` ya no devuelve un run estático: construye el grafo, los claims y
 los pasos a partir del bundle de la entidad solicitada (o del primer resultado de
 `query`). `depth` se valida para el contrato futuro; hoy el análisis es de primer
 grado.
 
-## Pendiente para conectar D1 y R2
+## D1 y R2
 
-1. Crear la base y el bucket:
-   `pnpm --filter @consta/backend exec wrangler d1 create consta` y
-   `pnpm --filter @consta/backend exec wrangler r2 bucket create consta-evidence`.
-2. Descomentar los bindings en `wrangler.jsonc`, completar `database_id` y
-   desplegar. Los nombres previstos son `DB` (D1) y `EVIDENCE_BUCKET` (R2).
-3. Añadir migraciones SQL (entidades, identificadores, relaciones, evidencia y
-   procedencias) y una capa de repositorio que sustituya las funciones demo de
-   `@consta/contracts`.
-4. Guardar documentos originales en R2 y cambiar `get_document` para devolver
-   metadatos reales y, si aplica, un stream o URL firmada. Mantener licencia y
+D1 ya está conectado con el binding `DB` y la migración
+`backend/migrations/0001_identity_analysis.sql` (análisis, entidades,
+afirmaciones, FTS5 e imágenes por ocupación). En local, `wrangler dev` guarda
+en `.wrangler/`.
+
+Para desplegar:
+
+1. `pnpm --filter @consta/backend exec wrangler d1 create consta` y reemplazar
+   `database_id` en `wrangler.jsonc` por el id real.
+2. `pnpm --filter @consta/backend exec wrangler d1 migrations apply consta --remote`
+   antes de servir tráfico.
+3. R2 sigue pendiente: crear `consta-evidence`, añadir el binding
+   `EVIDENCE_BUCKET` y guardar allí los documentos originales, con licencia y
    atribución por registro.
-5. Implementar ingesta de canales, autenticación/rate limiting y pruebas de
-   integración. Nada de esto está incluido aún.
+
+La base compartida guarda nombres y afirmaciones de personas investigadas. Por
+ahora no tiene autenticación, borrado ni visor público; conviene añadir un
+endpoint de borrado y una nota de privacidad antes de abrirla.
 
 ## Archivos
 
@@ -433,8 +484,11 @@ backend/
   package.json
   tsconfig.json
   wrangler.jsonc
+  migrations/
+    0001_identity_analysis.sql  # análisis, afirmaciones, FTS5 e imágenes
   src/
     analyze.ts   # grafo, claims y run determinista
+    db.ts        # guardado, búsqueda bd y pixel art por ocupación
     gt.ts        # cliente del Channel GT con timeout y fallback
     index.ts     # Hono, rutas, CORS y validación
 ```

@@ -51,6 +51,7 @@ import {
   type GeneralError,
 } from "./generalFuncs";
 import { confidenceForScore, scoreResults, type ResultToScore } from "./sourceScore";
+import { searchSavedClaims } from "./db";
 
 export const IDENTITY_NAME_MAX = 200;
 export const IDENTITY_DETAILS_MAX = 2000;
@@ -102,9 +103,9 @@ const IDENTITY_MODELS = [
 
 const FIELD_KEYS = new Set<string>(IDENTITY_FIELD_KEYS);
 
-/** Clave wikiData del pedido, mapeada al id canónico `wikidata`. */
+/** Herramientas que el modelo puede elegir. `bd` es la base compartida. */
 const IDENTITY_TOOLS_JSON =
-  '{"tools":[{"wikidata":"Es una wiki para data específica. Sirve para saber si el nombre es una persona o una empresa."},{"tavily":"Para buscar en la web, en registros públicos y en noticieros."}]}';
+  '{"tools":[{"wikidata":"Es una wiki para data específica. Sirve para saber si el nombre es una persona o una empresa."},{"tavily":"Para buscar en la web, en registros públicos y en noticieros."},{"bd":"Base de investigaciones previas de Consta. Devuelve afirmaciones ya guardadas, con su nivel de corroborancia, su puntaje y sus fuentes originales. Úsala para reutilizar trabajo ya verificado, no para inventar datos."}]}';
 
 /** Qué hay que buscar en cada campo. Una línea, en el orden del contrato. */
 const FIELD_LOOK_FOR: Record<IdentityFieldKey, string> = {
@@ -122,7 +123,7 @@ const FIELD_LOOK_FOR: Record<IdentityFieldKey, string> = {
   website: "El sitio web oficial.",
   email: "El correo electrónico.",
   phone: "El teléfono.",
-  occupation: "La ocupación, el cargo o la actividad.",
+  occupation: "La ocupación o el cargo principal. Si la fuente nombra varios, elige uno solo.",
 };
 
 /** Término corto para una búsqueda web de ese campo. */
@@ -228,20 +229,21 @@ const PLAN_SYSTEM = [
   IDENTITY_TOOLS_JSON,
   "Diccionario de datos que debes intentar encontrar. Si un dato no está en la fuente, queda not_found. No inventes el valor:",
   IDENTITY_FIELDS_JSON,
-  'Cada consulta incluye "tool" con exactamente "wikidata" o "tavily".',
+  'Cada consulta incluye "tool" con exactamente "wikidata", "tavily" o "bd".',
   'Cada "purpose" nombra el campo que esa consulta busca, con la clave y la etiqueta, por ejemplo "taxesID / NIT", "socialName / Razón social" o "address / Dirección".',
   'No sirve un purpose solo genérico ("historia", "conocer", "contexto", "identificar") sin una clave de campo.',
-  'La primera consulta es exactamente el nombre consultado, sin palabras de más, tool "wikidata", purpose "type / Tipo". Sirve para saber si es persona o empresa.',
-  'La segunda es el mismo nombre, tool "tavily", purpose "type / Tipo", para ver si es una figura pública en noticieros.',
-  "No busques NIT, razón social, DPI ni cargo hasta saber el tipo. En el plan solo van esas dos consultas.",
+  'Puedes empezar con una consulta a "bd" usando el nombre exacto: devuelve afirmaciones ya guardadas y evita repetir trabajo.',
+  'La siguiente consulta es exactamente el nombre consultado, sin palabras de más, tool "wikidata", purpose "type / Tipo". Sirve para saber si es persona o empresa.',
+  'La última es el mismo nombre, tool "tavily", purpose "type / Tipo", para ver si es una figura pública en noticieros.',
+  "No busques NIT, razón social, DPI ni cargo hasta saber el tipo. En el plan solo van esas consultas y, si aplica, la de bd.",
   "Escribe interpretation, query y purpose en español.",
   'Forma: {"interpretation":"INTERPRETACION","queries":[{"query":"CONSULTA","purpose":"CLAVE / ETIQUETA","tool":"wikidata"}]}',
-  'Reemplaza INTERPRETACION, CONSULTA, CLAVE y ETIQUETA. purpose lleva la clave real del diccionario. tool es "wikidata" o "tavily". No dejes los marcadores literales ni uses puntos suspensivos.',
+  'Reemplaza INTERPRETACION, CONSULTA, CLAVE y ETIQUETA. purpose lleva la clave real del diccionario. tool es "wikidata", "tavily" o "bd". No dejes los marcadores literales ni uses puntos suspensivos.',
 ].join("\n");
 
 const ROUND_SYSTEM = [
   "Eres el analista de identidad de Consta. Respondes únicamente con un objeto JSON. No uses markdown.",
-  "Solo puedes afirmar lo que esté escrito en los resultados etiquetados de Tavily o Wikidata.",
+  "Solo puedes afirmar lo que esté escrito en los resultados etiquetados de Tavily, Wikidata o la base bd. Los resultados de bd traen afirmaciones ya guardadas con sus fuentes originales.",
   "El nombre, la descripción y el interés de investigación del periodista orientan la búsqueda y no son una fuente.",
   "No inventes ni completes datos. Si un campo no está en los resultados, no lo incluyas: queda not_found.",
   "Un candidato es una persona, empresa o institución nombrada en un resultado. No hace falta NIT, DPI ni un perfil completo.",
@@ -249,7 +251,7 @@ const ROUND_SYSTEM = [
   "Cada resultado de Wikidata ya es una entidad y puede ser su propio candidato.",
   "candidates queda [] solo cuando ningún resultado nombra una persona, empresa o institución.",
   "Cada valor found, conflicting o alleged necesita sources cuya url sea una de las URLs entregadas. title y url son obligatorios.",
-  "source solo puede ser \"tavily\" o \"wikidata\", y debe coincidir con el resultado citado.",
+  "source solo puede ser \"tavily\", \"wikidata\" o \"bd\", y debe coincidir con el resultado citado. Si citas bd, el backend usa las fuentes originales guardadas.",
   "Una alegación no verificada usa status \"alleged\". Si las fuentes no coinciden, status es \"conflicting\" y value describe el conflicto sin elegir un ganador.",
   "type solo puede ser \"person\", \"enterprise\" o \"unknown\".",
   "nationalID es CUI o DPI. taxesID es NIT. No los intercambies.",
@@ -259,12 +261,13 @@ const ROUND_SYSTEM = [
   "Diccionario de datos a encontrar. No inventes un valor que no esté escrito en los resultados:",
   IDENTITY_FIELDS_JSON,
   'Cada nextQuery elige una herramienta y nombra el campo que busca: {"query":"CONSULTA","purpose":"CLAVE / ETIQUETA","tool":"tavily"}.',
-  'tool solo puede ser "wikidata" o "tavily". No uses cadenas sueltas ni otra herramienta.',
+  'tool solo puede ser "wikidata", "tavily" o "bd". No uses cadenas sueltas ni otra herramienta.',
   "Primero decide type: person o enterprise. No busques el resto hasta tener ese tipo.",
   "Si type es person, es una figura pública: nextQueries van a noticieros (occupation, aliases, dateOfBirth, nationality) y a registros públicos para nationalID. No pidas NIT, razón social ni fecha de constitución.",
   "Si type es enterprise, nextQueries van a registros públicos: socialName, taxesID, address, website, phone, legalRepresentative, incorporationDate. No la busques como noticia.",
   "Si type sigue unknown, la única nextQuery distingue persona o empresa. No pidas un NIT.",
   "wikidata: el query es el nombre o un alias corto. tavily para una persona: el nombre más el dato, en noticieros. tavily para una empresa: el nombre más el dato del registro.",
+  "bd: úsala cuando el sujeto o una conexión ya pueda estar investigada. Devuelve afirmaciones guardadas con su corroborancia y fuentes; no la uses para completar un campo que la fuente no dice.",
   "En la ronda 3, action es \"stop\" y nextQueries es [].",
   "Si quedan campos en not_found, quedan rondas y hay una búsqueda pública concreta para esos campos, action es \"continue\" y nextQueries trae de 1 a 5 búsquedas nuevas.",
   "Si no hay más pistas públicas para los campos que faltan, action es \"stop\". No inventes valores para llenar el perfil.",
@@ -315,17 +318,46 @@ function readNote(value: unknown): string | null {
   return note;
 }
 
+const EMPTY_VALUE_TOKENS = new Set([
+  "null",
+  "undefined",
+  "none",
+  "n/a",
+  "na",
+  "ninguno",
+  "ninguna",
+  "sin dato",
+  "sin datos",
+  "no aplica",
+]);
+
+function isEmptyFieldValue(value: string): boolean {
+  return EMPTY_VALUE_TOKENS.has(
+    value.trim().toLocaleLowerCase("es").replace(/[.]+$/, ""),
+  );
+}
+
 function readLooseValue(value: unknown): string | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return clip(String(value), 500);
   }
-  if (typeof value === "string") return clip(value, 500);
+  if (typeof value === "string") {
+    const text = clip(value, 500);
+    return text && !isEmptyFieldValue(text) ? text : null;
+  }
   if (!Array.isArray(value)) return null;
   const parts = value
     .map((item) => clip(item, 160))
-    .filter((item): item is string => item !== null);
+    .filter(
+      (item): item is string => item !== null && !isEmptyFieldValue(item),
+    );
   if (parts.length === 0) return null;
   return clip(parts.join(", "), 500);
+}
+
+function readOccupation(value: unknown): string | null {
+  const occupation = clip(value, 120);
+  return occupation && !isEmptyFieldValue(occupation) ? occupation : null;
 }
 
 function emptyResult(
@@ -464,6 +496,7 @@ function readTool(value: unknown): IdentitySource | null {
   const token = value.trim().toLocaleLowerCase("es");
   if (token === "wikidata") return "wikidata";
   if (token === "tavily") return "tavily";
+  if (token === "bd") return "bd";
   return null;
 }
 
@@ -571,13 +604,12 @@ function readSources(
   for (const entry of value) {
     if (!isRecord(entry) || typeof entry.url !== "string") continue;
     const item = findCatalogItem(catalog, entry.url);
-    if (!item || seen.has(item.url) || !itemMentions(item, names)) continue;
-    seen.add(item.url);
-    sources.push({
-      source: item.source,
-      title: item.title,
-      url: item.url,
-    });
+    if (!item || !itemMentions(item, names)) continue;
+    for (const source of expandedSources(item)) {
+      if (seen.has(source.url)) continue;
+      seen.add(source.url);
+      sources.push(source);
+    }
   }
 
   return sources;
@@ -792,7 +824,25 @@ async function searchIdentityQuery(
   env: GeneralEnv,
   directed: IdentityToolQuery,
 ): Promise<IdentityQueryResult> {
-  const sources: IdentitySource[] =
+  if (directed.tool === "bd") {
+    const items = await searchSavedClaims(env.DB, directed.query, SEARCH_LIMIT);
+    return {
+      query: directed.query,
+      tool: "bd",
+      items,
+      errors: env.DB
+        ? []
+        : [
+            {
+              source: "bd",
+              code: "db_unavailable",
+              message: "La base de investigaciones no está disponible.",
+            },
+          ],
+    };
+  }
+
+  const sources: Array<"tavily" | "wikidata"> =
     directed.tool === null ? ["tavily", "wikidata"] : [directed.tool];
 
   const results = await Promise.all(
@@ -1020,8 +1070,9 @@ function planPrompt(name: string, details?: string, interest?: string): string {
     "Diccionario de datos que cada consulta debe intentar encontrar. purpose nombra la clave. No inventes los valores:",
     IDENTITY_FIELDS_JSON,
     "Primero hay que saber si es persona o empresa. No pidas NIT, razón social ni cargo en el plan.",
-    'Cada query lleva "tool": "wikidata" o "tavily" y purpose "type / Tipo".',
-    "La primera es el nombre exacto en wikidata. La segunda es el mismo nombre en tavily, para noticieros.",
+    'Cada query lleva "tool": "wikidata", "tavily" o "bd" y purpose "type / Tipo".',
+    "Puedes añadir primero una consulta a bd con el nombre exacto, para reutilizar investigaciones guardadas.",
+    "La consulta de wikidata es el nombre exacto. La de tavily es el mismo nombre, para noticieros.",
     "Devuelve solo el JSON del plan.",
   ].join("\n");
 }
@@ -1053,7 +1104,7 @@ function roundPrompt(input: {
     "Cada nextQuery apunta a uno de esos campos. Una figura pública se rastrea en noticieros. Una empresa, en registros públicos. No mezcles esos caminos.",
     "Si un valor no es lo que el campo parece, pon note en ese campo. Ejemplo: la dirección es de una oficina y no del domicilio.",
     "Si una fuente nombra a la entidad, el candidato es obligatorio. Los campos que la fuente no trae siguen en not_found. No inventes el valor.",
-    'Si action es "continue", nextQueries es una lista de objetos {"query":"CONSULTA","purpose":"CLAVE / ETIQUETA","tool":"wikidata"} o {"query":"CONSULTA","purpose":"CLAVE / ETIQUETA","tool":"tavily"}.',
+    'Si action es "continue", nextQueries es una lista de objetos {"query":"CONSULTA","purpose":"CLAVE / ETIQUETA","tool":"wikidata"}, {"query":"CONSULTA","purpose":"CLAVE / ETIQUETA","tool":"tavily"} o {"query":"CONSULTA","purpose":"CLAVE / ETIQUETA","tool":"bd"}.',
     "",
     "Candidatos actuales:",
     JSON.stringify(input.candidates),
@@ -1067,8 +1118,7 @@ function roundPrompt(input: {
     lines.push(
       search.tool
         ? `Herramienta usada: ${search.tool}`
-        : "Herramienta ausente o inválida: se buscó en wikidata y en tavily.",
-    );
+        : "Herramienta ausente o inválida: se buscó en wikidata y en tavily.",    );
     for (const error of search.errors) {
       lines.push(`Error ${error.source}: ${error.message}`);
     }
@@ -1112,6 +1162,17 @@ function dedupeQueries(
 
 function sourceRef(item: IdentitySearchItem): IdentitySourceRef {
   return { source: item.source, title: item.title, url: item.url };
+}
+
+/**
+ * Un resultado de `bd` no se cita como fuente: se expande a las fuentes
+ * originales con las que se guardó la afirmación.
+ */
+function expandedSources(item: IdentitySearchItem): IdentitySourceRef[] {
+  if (item.source === "bd" && item.saved && item.saved.sources.length > 0) {
+    return item.saved.sources;
+  }
+  return [sourceRef(item)];
 }
 
 function mentionsName(text: string | undefined, name: string): boolean {
@@ -1285,9 +1346,12 @@ function sourcedField(
   const seen = new Set<string>();
   for (const entry of entries) {
     for (const item of entry.items) {
-      if (seen.has(item.url)) continue;
-      seen.add(item.url);
-      sources.push(sourceRef(item));
+      for (const source of expandedSources(item)) {
+        if (seen.has(source.url)) continue;
+        seen.add(source.url);
+        sources.push(source);
+        if (sources.length === 5) break;
+      }
       if (sources.length === 5) break;
     }
     if (sources.length === 5) break;
@@ -2057,6 +2121,9 @@ function buildRootClaim(name: string, candidate: IdentityCandidate): IdentityCla
         label,
         type: profileType(candidate.fields.find((field) => field.key === "type")?.value),
         description: candidate.description,
+        occupation:
+          candidate.fields.find((field) => field.key === "occupation")?.value ??
+          null,
         sources,
         score: null,
         confidence: null,
@@ -2204,6 +2271,9 @@ function buildConnectionClaims(
     const sources = readConnectionClaimSources(claim, items);
     if (sources.length === 0) continue;
     const score = readConnectionClaimScore(claim, sources);
+    const saved = claim.indexes
+      .map((index) => items[index])
+      .find((item) => item?.source === "bd" && item.saved)?.saved;
     claims.push({
       id: `claim-${round}-${claims.length}`,
       text: claim.text,
@@ -2214,6 +2284,7 @@ function buildConnectionClaims(
       score,
       confidence: confidenceForScore(score),
       round,
+      ...(saved ? { saved } : {}),
     });
   }
   if (claims.length === 0) return null;
@@ -2316,6 +2387,7 @@ function readConnectionEntities(
       clip(entry.id, 40) ?? key.replace(/\s+/g, "-").slice(0, 40);
     const type = profileType(clip(entry.type, 40));
     const description = clip(entry.description, 500) ?? "";
+    const occupation = readOccupation(entry.occupation);
     const indexes = Array.isArray(entry.indexes)
       ? entry.indexes.filter(
           (index): index is number => typeof index === "number" && index >= 0,
@@ -2328,9 +2400,12 @@ function readConnectionEntities(
     const seenUrls = new Set<string>();
     for (const index of indexes) {
       const item = items[index];
-      if (!item || seenUrls.has(item.url)) continue;
-      seenUrls.add(item.url);
-      sources.push({ source: item.source, title: item.title, url: item.url });
+      if (!item) continue;
+      for (const source of expandedSources(item)) {
+        if (seenUrls.has(source.url)) continue;
+        seenUrls.add(source.url);
+        sources.push(source);
+      }
     }
     if (sources.length === 0) {
       for (const source of readConnectionSources(
@@ -2345,6 +2420,7 @@ function readConnectionEntities(
       label,
       type,
       description,
+      occupation,
       sources,
       score: null,
       confidence: null,
@@ -2357,13 +2433,11 @@ function readConnectionSources(items: readonly IdentitySearchItem[]): IdentitySo
   const sources: IdentitySourceRef[] = [];
   const seen = new Set<string>();
   for (const item of items) {
-    if (seen.has(item.url)) continue;
-    seen.add(item.url);
-    sources.push({
-      source: item.source,
-      title: item.title,
-      url: item.url,
-    });
+    for (const source of expandedSources(item)) {
+      if (seen.has(source.url)) continue;
+      seen.add(source.url);
+      sources.push(source);
+    }
   }
   return sources;
 }
@@ -2375,13 +2449,11 @@ function readConnectionClaimSources(claim: RawConnectionClaim, items: readonly I
     if (index < 0 || index >= items.length) continue;
     const item = items[index];
     if (!item) continue;
-    if (seen.has(item.url)) continue;
-    seen.add(item.url);
-    sources.push({
-      source: item.source,
-      title: item.title,
-      url: item.url,
-    });
+    for (const source of expandedSources(item)) {
+      if (seen.has(source.url)) continue;
+      seen.add(source.url);
+      sources.push(source);
+    }
   }
   return sources;
 }
@@ -2711,8 +2783,9 @@ function buildConnectionEntitiesPrompt(input: {
     "",
     "Devuelve las personas y las organizaciones que aparecen nombradas en estos resultados y que no son el sujeto.",
     "Formato exacto:",
-    '{"entities":[{"id":"e1","label":"Nombre completo","type":"person","description":"Quién es en una frase","indexes":[1,3]}]}',
+    '{"entities":[{"id":"e1","label":"Nombre completo","type":"person","description":"Quién es en una frase","occupation":"Cargo u ocupación o null","indexes":[1,3]}]}',
     'type solo puede ser "person" o "enterprise".',
+    "occupation es un solo cargo u ocupación principal que la fuente nombre; si nombra varios, elige uno. Si no aparece, null. No lo inventes.",
     "indexes son los números de las fuentes de esta vuelta donde aparece la entidad. Usa [] si no la encuentras en ninguna.",
     'Si no hay entidades distintas al sujeto, devuelve {"entities":[]}.',
   );
@@ -2809,8 +2882,9 @@ const CONNECTION_PLAN_SYSTEM = [
   "Sigue las instrucciones de la ronda en el mensaje del usuario.",
   "Una relación entre dos identidades no es una relación con el sujeto. Si la fuente no une la última conexión con el sujeto, la rama queda abierta.",
   "Si una rama abierta no tiene evidencia pública que la una al sujeto, dilo en purpose y no sigas profundizando por ella.",
-  "Cada nextQuery lleva \"query\", \"purpose\" y \"tool\": \"wikidata\" o \"tavily\". purpose describe la conexión o afirmación a explorar, no un campo de perfil.",
-  "Si falta tool, la consulta se busca en ambas. Si tool no es válido, la consulta se busca en ambas.",
+  "Cada nextQuery lleva \"query\", \"purpose\" y \"tool\": \"wikidata\", \"tavily\" o \"bd\". purpose describe la conexión o afirmación a explorar, no un campo de perfil.",
+  "bd devuelve afirmaciones ya guardadas con su corroborancia y sus fuentes originales; úsala para reutilizar conexiones ya verificadas.",
+  "Si falta tool, la consulta se busca en wikidata y en tavily. Si tool no es válido, también.",
   "Si no hay afirmaciones nuevas, action es \"stop\" y nextQueries es [].",
   "Devuelve solo el JSON con queries.",
 ].join("\n");
@@ -2822,16 +2896,17 @@ const CONNECTION_ENTITY_SYSTEM = [
   "Incluye personas y organizaciones que la afirmación necesite para conectar al sujeto con alguien más: familiares, socios, funcionarios, empresas, ministerios.",
   "Incluye también partidos, fondos, empresas asociadas, organismos de apoyo y las personas que los representen, cuando la fuente los nombre.",
   "Incluye también las entidades que aparecen conectadas con otra entidad ya conocida, aunque la fuente no las una al sujeto.",
-  "Cada entidad lleva id, label, type, description e indexes. type es person o enterprise; indexes cita los números de las fuentes.",
+  "Cada entidad lleva id, label, type, description, occupation e indexes. type es person o enterprise; occupation es un solo cargo principal que la fuente nombre o null; indexes cita los números de las fuentes.",
   'Devuelve solo el JSON con entities: {"entities":[...]}. Si no hay entidades distintas al sujeto, entities es [].',
 ].join("\n");
 
 const CONNECTION_CLAIM_SYSTEM = [
   "Eres el razonador de conexiones de Consta. Respondes únicamente con un objeto JSON. No uses markdown.",
-  "Solo puedes afirmar lo que esté escrito en las fuentes numeradas de esta vuelta.",
+  "Solo puedes afirmar lo que esté escrito en las fuentes numeradas de esta vuelta. Si una fuente es bd, la afirmación ya trae sus fuentes originales.",
   "El nombre, la descripción y el interés de investigación son la consulta del periodista, no evidencia.",
   "No inventes ni completes datos. Si no hay afirmaciones nuevas, claims es [].",
   "Cada claim lleva \"text\", \"parentText\" e \"indexes\": una lista de números de las fuentes numeradas de esta vuelta.",
+  "Cuando reutilices una afirmación de bd, mantén su contenido y cita el número de esa fuente; el backend conserva la corroborancia y las fuentes originales.",
   "El texto debe nombrar a las personas y organizaciones de la fuente y la relación cuando la fuente la diga: hermano, socia, ministro, representante legal, empleado, militante, donante, contratista, patrocinador.",
   "Si la fuente nombra partido, fondeo, empresa asociada o apoyo externo, escríbelo como afirmación con origen y destino.",
   "Cada claim debe dejar claro el origen y el destino de la relación. No atribuyas al sujeto una relación que la fuente solo afirma entre otras dos personas.",

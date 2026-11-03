@@ -8,17 +8,22 @@
     "enabled": true
   },
   "vars": {
-    "ENVIRONMENT": "demo"
-  }
+    "ENVIRONMENT": "demo",
+    "IMAGE_PROVIDER": "mock",
+    "IMAGE_MODEL": "meta/muse-image"
+  },
 
-  // Persistencia: se habilitará cuando exista ingesta real.
-  // "d1_databases": [
-  //   {
-  //     "binding": "DB",
-  //     "database_name": "consta",
-  //     "database_id": "<D1_DATABASE_ID>"
-  //   }
-  // ],
+  // Base compartida de investigaciones (bd) e imágenes por ocupación.
+  // En local, wrangler guarda en .wrangler/. Antes de desplegar, reemplaza
+  // database_id por el id real de `wrangler d1 create consta`.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "consta",
+      "database_id": "consta-local",
+      "migrations_dir": "migrations"
+    }
+  ]
   // "r2_buckets": [
   //   {
   //     "binding": "EVIDENCE_BUCKET",

@@ -13,8 +13,10 @@ import {
 
 import ClaimsWeb, { type BranchRequest } from "./ClaimsWeb";
 import IdentityProfileFields, {
+  OccupationPhoto,
   identityCandidateSources as candidateSources,
   identityDisplayValue as displayValue,
+  identityFieldLabelEn as fieldLabel,
   identityFieldOf as fieldOf,
   identityFieldStatusText as fieldStatusText,
   identitySourceLabel as sourceLabel,
@@ -34,10 +36,10 @@ const COMPACT_FIELD_KEYS: ReadonlySet<IdentityFieldKey> = new Set([
  * mientras la vuelta está en curso; no insinúan resultados que aún no existen.
  */
 const CONNECTION_PHASES = [
-  "Buscando conexiones",
-  "Identificando personas e instituciones",
-  "Contrastando afirmaciones",
-  "Armando el mapa de conexiones",
+  "Searching connections",
+  "Identifying people and institutions",
+  "Checking claims",
+  "Building the map",
 ] as const;
 
 const CONNECTION_PHASE_INTERVAL_MS = 12_000;
@@ -223,13 +225,16 @@ const QA_CLAIMS: IdentityClaim[] = [
 ];
 
 function providerLabel(source: IdentitySource): string {
-  return source === "tavily" ? "Tavily" : "Wikidata";
+  if (source === "tavily") return "Tavily";
+  if (source === "bd") return "BD";
+  return "Wikidata";
 }
 
 function toolLabel(tool: IdentitySource | null | undefined): string {
   if (tool === "tavily") return "Tavily";
   if (tool === "wikidata") return "Wikidata";
-  return "Tavily y Wikidata";
+  if (tool === "bd") return "BD";
+  return "Tavily and Wikidata";
 }
 
 function previewFields(candidate: IdentityCandidate): IdentityField[] {
@@ -239,7 +244,7 @@ function previewFields(candidate: IdentityCandidate): IdentityField[] {
 }
 
 function decisionLabel(action: "continue" | "stop"): string {
-  return action === "continue" ? "Continúa" : "Se detiene";
+  return action === "continue" ? "Continues" : "Stops";
 }
 
 export default function IdentityPanel() {
@@ -320,12 +325,12 @@ export default function IdentityPanel() {
         aria-labelledby="identity-qa-title"
       >
         <div className="identity-head">
-          <p className="eyebrow">Vista de QA</p>
-          <h2 id="identity-qa-title">Mapa de conexiones con datos de prueba.</h2>
+          <p className="eyebrow">QA view</p>
+          <h2 id="identity-qa-title">Connection map with sample data.</h2>
         </div>
         <p className="identity-status">
-          Cinco afirmaciones de demostración. Un hilo agrupa las que unen al
-          mismo par. El clic abre la tabla o la tarjeta.
+          Five demonstration claims. One thread groups claims that join the
+          same pair. Click to open the table or the card.
         </p>
         <ClaimsWeb claims={QA_CLAIMS} summary={QA_SUMMARY} />
       </section>
@@ -352,19 +357,19 @@ export default function IdentityPanel() {
       aria-labelledby="identity-title"
     >
       <div className="identity-head">
-        <p className="eyebrow">Resolución de identidad</p>
+        <p className="eyebrow">Identity</p>
         <h2 id="identity-title">
           {phase === "loading" && !result
-            ? "Buscando en fuentes públicas."
+            ? "Searching public sources."
             : phase === "loading"
-              ? "Buscando NIT, teléfono, correo, representante, dirección y documento."
-              : "Candidatos con fuente."}
+              ? "Searching tax ID, phone, email, legal representative, address, and national ID."
+              : "Candidates with a source."}
         </h2>
       </div>
 
       {phase === "loading" && !result ? (
         <p className="identity-status" role="status">
-          El plan y hasta tres rondas pueden tardar unos minutos.
+          The plan and up to three rounds can take a few minutes.
         </p>
       ) : null}
 
@@ -389,10 +394,10 @@ export default function IdentityPanel() {
               fieldOf(candidate, "taxesID"),
             ];
             const buttonLabel = isConfirmed
-              ? "Identidad confirmada"
+              ? "Identity confirmed"
               : isExpanded
-                ? "Confirmar identidad"
-                : "Es este";
+                ? "Confirm identity"
+                : "This is the one";
 
             return (
               <li key={candidate.id}>
@@ -405,7 +410,7 @@ export default function IdentityPanel() {
                   <dl>
                     {rows.map((field) => (
                       <div key={field.key}>
-                        <dt>{field.label}</dt>
+                        <dt>{fieldLabel(field.key)}</dt>
                         <dd>
                           {displayValue(field)}
                           {field.confidence === "probable" ||
@@ -426,7 +431,7 @@ export default function IdentityPanel() {
 
                   {showPreview ? (
                     <div className="identity-preview">
-                      <p className="mono-label">Vista preliminar</p>
+                      <p className="mono-label">Preview</p>
                       {candidate.description ? (
                         <p className="identity-preview-text">
                           {candidate.description}
@@ -435,7 +440,7 @@ export default function IdentityPanel() {
                       <dl className="identity-preview-fields">
                         {previewFields(candidate).map((field) => (
                           <div key={field.key}>
-                            <dt>{field.label}</dt>
+                            <dt>{fieldLabel(field.key)}</dt>
                             <dd>
                               {displayValue(field)}
                               {field.confidence ? (
@@ -456,7 +461,7 @@ export default function IdentityPanel() {
                         ))}
                       </dl>
                       <div className="identity-preview-sources">
-                        <p className="mono-label">Fuentes</p>
+                        <p className="mono-label">Sources</p>
                         {sources.length > 0 ? (
                           <ul className="identity-sources">
                             {sources.map((source) => (
@@ -473,12 +478,12 @@ export default function IdentityPanel() {
                             ))}
                           </ul>
                         ) : (
-                          <p className="identity-missing">Sin fuentes válidas.</p>
+                          <p className="identity-missing">No valid sources.</p>
                         )}
                       </div>
                       <p className="identity-preview-hint">
-                        Confirma para abrir la ficha completa y tejer las
-                        conexiones.
+                        Confirm to open the full profile and start mapping
+                        connections.
                       </p>
                     </div>
                   ) : null}
@@ -512,21 +517,21 @@ export default function IdentityPanel() {
           IDENTITY_MAX_EXTRA_SEARCHES ? (
             <button type="button" disabled={phase === "loading"} onClick={() => void searchMore()}>
               {phase === "loading"
-                ? "Buscando más"
+                ? "Searching more"
                 : result.rounds.filter((round) => round.round > 3).length === 1
-                  ? "Última búsqueda extra"
-                  : "Buscar más"}
-              <span>NIT, teléfono, correo, representante, dirección y documento.</span>
+                  ? "Last extra search"
+                  : "Search more"}
+              <span>Tax ID, phone, email, legal representative, address, and national ID.</span>
             </button>
           ) : (
-            <p className="identity-status">Ya se pidieron las dos búsquedas extra.</p>
+            <p className="identity-status">Both extra searches have already been used.</p>
           )}
         </div>
       ) : null}
 
       {result && phase !== "loading" && result.candidates.length === 0 && !error ? (
         <p className="identity-status">
-          Ningún candidato quedó sostenido por una fuente pública.
+          No candidate was supported by a public source.
         </p>
       ) : null}
 
@@ -534,31 +539,39 @@ export default function IdentityPanel() {
         <div
           ref={profileRef}
           className="identity-profile"
-          aria-label={`Perfil de ${confirmed.label}`}
+          aria-label={`Profile of ${confirmed.label}`}
         >
           <div className="identity-profile-head">
-            <p className="mono-label">Sujeto confirmado</p>
-            <h3>{confirmed.label}</h3>
+            <span className="identity-profile-photo" aria-hidden="true">
+              <OccupationPhoto
+                label={confirmed.label}
+                occupation={fieldOf(confirmed, "occupation").value}
+              />
+            </span>
+            <div>
+              <p className="mono-label">Confirmed subject</p>
+              <h3>{confirmed.label}</h3>
+            </div>
           </div>
 
           <div className="identity-subject">
             <div>
-              <p className="mono-label">Quién es</p>
+              <p className="mono-label">Who they are</p>
               <p>
                 {summary?.who.trim() ||
                   confirmed.description ||
-                  "Aún se está resolviendo el contexto del sujeto."}
+                  "The subject context is still being resolved."}
               </p>
             </div>
             <div>
-              <p className="mono-label">Hallazgos</p>
+              <p className="mono-label">Findings</p>
               <p>
                 {summary?.findings.trim() ||
                   (weaving
-                    ? "Las conexiones todavía se están tejiendo."
+                    ? "Connections are still being mapped."
                     : connectionPhase === "error"
-                      ? "No se pudo completar el contexto del sujeto."
-                      : "Todavía no hay un resumen de hallazgos.")}
+                      ? "The subject context could not be completed."
+                      : "There is no findings summary yet.")}
               </p>
             </div>
           </div>
@@ -573,13 +586,13 @@ export default function IdentityPanel() {
           aria-labelledby="identity-connections-title"
         >
           <div className="identity-connections-head">
-            <p className="mono-label">Conexiones</p>
+            <p className="mono-label">Connections</p>
             <h3 id="identity-connections-title">
               {weaving
                 ? connection
-                  ? "Tejiendo la siguiente vuelta."
-                  : "Tejiendo conexiones."
-                : "Lo que sostiene la identidad."}
+                  ? "Mapping the next round."
+                  : "Mapping connections."
+                : "What supports the identity."}
             </h3>
           </div>
 
@@ -587,14 +600,14 @@ export default function IdentityPanel() {
             <div className="identity-weaving">
               <p>
                 {connection
-                  ? `Vuelta ${nextRound} de ${MAX_CONNECTION_ROUNDS}`
-                  : "Tejiendo conexiones"}
+                  ? `Round ${nextRound} of ${MAX_CONNECTION_ROUNDS}`
+                  : "Mapping connections"}
               </p>
               {branchLabel ? (
-                <p className="identity-weaving-branch">Rama: {branchLabel}</p>
+                <p className="identity-weaving-branch">Branch: {branchLabel}</p>
               ) : null}
               <span className="identity-weaving-thread" aria-hidden="true" />
-              <ol className="identity-phases" aria-label="Fases de las conexiones">
+              <ol className="identity-phases" aria-label="Connection phases">
                 {CONNECTION_PHASES.map((phaseLabel, phaseIndex) => (
                   <li
                     key={phaseLabel}
@@ -614,16 +627,16 @@ export default function IdentityPanel() {
                 ))}
               </ol>
               <p className="sr-only" role="status" aria-live="polite">
-                Fase actual: {currentPhase}.
+                Current phase: {currentPhase}.
               </p>
               <p className="identity-weaving-note">
                 {connection
                   ? wovenClaims > 0
                     ? `${wovenClaims} ${
-                        wovenClaims === 1 ? "afirmación tejida" : "afirmaciones tejidas"
-                      } hasta ahora. El mapa se actualiza al cerrar cada vuelta.`
-                    : "Aún no hay afirmaciones cerradas en esta vuelta. El mapa se actualiza al cerrarla."
-                  : "Las fases avanzan mientras se trabaja. Las afirmaciones aparecen al cerrar cada vuelta."}
+                        wovenClaims === 1 ? "claim mapped" : "claims mapped"
+                      } so far. The map updates when each round closes.`
+                    : "No claims have closed in this round yet. The map updates when it does."
+                  : "Phases advance while the work runs. Claims appear when each round closes."}
               </p>
             </div>
           ) : null}
@@ -640,7 +653,7 @@ export default function IdentityPanel() {
               className="identity-retry"
               onClick={retryConnections}
             >
-              Reintentar conexiones
+              Retry connections
             </button>
           ) : null}
 
@@ -658,7 +671,7 @@ export default function IdentityPanel() {
 
           {connection && !connection.canContinue && connection.stoppedReason ? (
             <p className="identity-stop">
-              Se detuvo: {connection.stoppedReason}
+              Stopped: {connection.stoppedReason}
             </p>
           ) : null}
         </section>
@@ -666,14 +679,14 @@ export default function IdentityPanel() {
 
       {connection && connection.rounds.length > 0 ? (
         <details className="identity-trace identity-connection-trace">
-          <summary>Cómo se tejió</summary>
+          <summary>How it was mapped</summary>
           <p>
-            Rondas del loop de conexiones. Van aparte del contador de búsquedas
-            extra de identidad.
+            Rounds from the connections loop. Separate from the extra identity
+            searches.
           </p>
           {connection.rounds.map((round) => (
             <article key={round.round} className="identity-round">
-              <h3>Vuelta {round.round}</h3>
+              <h3>Round {round.round}</h3>
               {round.queries.length > 0 ? (
                 <ul className="identity-round-queries">
                   {round.queries.map((item) => (
@@ -685,7 +698,7 @@ export default function IdentityPanel() {
                   ))}
                 </ul>
               ) : (
-                <p className="identity-missing">Sin consultas nuevas.</p>
+                <p className="identity-missing">No new queries.</p>
               )}
               {round.searches.map((search) => (
                 <div
@@ -714,19 +727,19 @@ export default function IdentityPanel() {
                       ))}
                     </ul>
                   ) : (
-                    <p className="identity-missing">Sin resultados.</p>
+                    <p className="identity-missing">No results.</p>
                   )}
                 </div>
               ))}
               <p className="identity-decision">
-                {round.stopped ? "Se detuvo. " : "Continúa. "}
-                {round.reason || "La vuelta no dejó un motivo escrito."}
+                {round.stopped ? "Stopped. " : "Continues. "}
+                {round.reason || "The round did not leave a written reason."}
               </p>
               <p className="identity-next">
                 {round.entities.length}{" "}
-                {round.entities.length === 1 ? "identidad" : "identidades"} ·{" "}
+                {round.entities.length === 1 ? "identity" : "identities"} ·{" "}
                 {round.claims.length}{" "}
-                {round.claims.length === 1 ? "afirmación" : "afirmaciones"}
+                {round.claims.length === 1 ? "claim" : "claims"}
               </p>
             </article>
           ))}
@@ -735,7 +748,7 @@ export default function IdentityPanel() {
 
       {result && (result.plan.queries.length > 0 || result.rounds.length > 0) ? (
         <details className="identity-trace">
-          <summary>Cómo se buscó</summary>
+          <summary>How it was searched</summary>
           {result.plan.interpretation ? <p>{result.plan.interpretation}</p> : null}
           {result.plan.queries.length > 0 ? (
             <ol>
@@ -751,7 +764,7 @@ export default function IdentityPanel() {
 
           {result.rounds.map((round) => (
             <article key={round.round} className="identity-round">
-              <h3>{round.round > 3 ? `Búsqueda extra ${round.round - 3}` : `Ronda ${round.round}`}</h3>
+              <h3>{round.round > 3 ? `Extra search ${round.round - 3}` : `Round ${round.round}`}</h3>
               <ul className="identity-round-queries">
                 {round.queries.map((item) => (
                   <li key={`${item.tool ?? "both"}-${item.query}`}>
@@ -788,18 +801,18 @@ export default function IdentityPanel() {
                       ))}
                     </ul>
                   ) : (
-                    <p className="identity-missing">Sin resultados.</p>
+                    <p className="identity-missing">No results.</p>
                   )}
                 </div>
               ))}
               <p className="identity-decision">
                 {round.decision
                   ? `${decisionLabel(round.decision.action)}. ${round.decision.reason}`
-                  : "La ronda no llegó a una decisión."}
+                  : "The round did not reach a decision."}
               </p>
               {round.decision && round.decision.nextQueries.length > 0 ? (
                 <p className="identity-next">
-                  Siguiente búsqueda:{" "}
+                  Next search:{" "}
                   {round.decision.nextQueries
                     .map((item) => `${item.query} (${toolLabel(item.tool)})`)
                     .join(" · ")}
@@ -807,7 +820,7 @@ export default function IdentityPanel() {
               ) : null}
               {round.round === 3 && round.decision?.action === "continue" ? (
                 <p className="identity-next">
-                  La búsqueda se detiene al llegar a tres rondas.
+                  Search stops after three rounds.
                 </p>
               ) : null}
             </article>

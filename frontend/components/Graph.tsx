@@ -200,9 +200,9 @@ function nodeShapePath(kind: EntityKind, r: number): string {
 }
 
 const DEFAULT_STATUS_LEGEND = {
-  confirmed: "Confirmado",
+  confirmed: "Confirmed",
   probable: "Probable",
-  unresolved: "Sin resolver",
+  unresolved: "Unresolved",
 } as const;
 
 export default function Graph({
@@ -214,7 +214,7 @@ export default function Graph({
   onSelect,
   onSelectEdge,
   compact = false,
-  theme = "ink",
+  theme = "paper",
   hint,
   className,
   statusLegend = DEFAULT_STATUS_LEGEND,
@@ -314,8 +314,8 @@ export default function Graph({
         className={`graph graph--${theme} graph--empty${className ? ` ${className}` : ""}`}
       >
         <div className="graph-empty">
-          <span className="mono-label">Sin grafo</span>
-          <p>No hay vínculos suficientes para dibujar este expediente.</p>
+          <span className="mono-label">No graph</span>
+          <p>There are not enough ties to draw this map.</p>
         </div>
       </figure>
     );
@@ -332,10 +332,10 @@ export default function Graph({
       <svg
         viewBox={`0 0 ${layout.width} ${layout.height}`}
         role="group"
-        aria-label="Grafo de vínculos del expediente"
+        aria-label="Connection map"
         className="graph-svg"
       >
-        <title>Grafo de vínculos del expediente</title>
+        <title>Connection map</title>
 
         {layout.edges.map((edge) => {
           const active = activeEdgeIds?.has(edge.id) ?? false;
@@ -353,7 +353,7 @@ export default function Graph({
               aria-pressed={onSelectEdge ? selected : undefined}
               aria-label={
                 onSelectEdge
-                  ? `${edge.label}. Abrir las afirmaciones de este hilo.`
+                  ? `${edge.label}. Open the claims on this thread.`
                   : undefined
               }
               onClick={
@@ -427,7 +427,7 @@ export default function Graph({
               tabIndex={onSelect ? 0 : undefined}
               aria-label={
                 onSelect
-                  ? `${node.label}. ${entityKindLabel(node.kind)}. Abrir expediente.`
+                  ? `${node.label}. ${entityKindLabel(node.kind)}. Open card.`
                   : undefined
               }
               onClick={onSelect ? () => onSelect(node.id) : undefined}
@@ -508,7 +508,7 @@ export default function Graph({
           {statusLegend.unresolved}
         </span>
         <span className="legend-kinds">
-          Cuadrado empresa · círculo persona · rombo entidad
+          Square company · circle person · diamond agency
         </span>
         {hint ? <span className="graph-hint">{hint}</span> : null}
       </figcaption>

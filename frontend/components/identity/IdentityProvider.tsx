@@ -21,6 +21,7 @@ import {
   investigateIdentity,
   requestIdentityConnections,
   requestMoreIdentity,
+  saveIdentityAnalysis,
 } from "@/lib/identity";
 
 type IdentityPhase = "idle" | "loading" | "ready" | "error";
@@ -60,7 +61,7 @@ const IdentityContext = createContext<IdentityContextValue | null>(null);
 export function useIdentity(): IdentityContextValue {
   const value = useContext(IdentityContext);
   if (!value) {
-    throw new Error("useIdentity debe usarse dentro de IdentityProvider.");
+    throw new Error("useIdentity must be used inside IdentityProvider.");
   }
   return value;
 }
@@ -94,6 +95,36 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
   const [consultedInterest, setConsultedInterest] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const runRef = useRef(0);
+
+  /**
+   * Guardado silencioso en la base compartida. Un fallo no rompe la
+   * investigación: solo queda en consola.
+   */
+  const persistAnalysis = useCallback(
+    async (
+      name: string,
+      details: string,
+      interest: string,
+      candidate: IdentityInvestigation["candidates"][number] | null,
+      state: IdentityConnectionState,
+    ) => {
+      try {
+        await saveIdentityAnalysis({
+          name,
+          ...(details ? { details } : {}),
+          ...(interest ? { interest } : {}),
+          candidate,
+          connection: state,
+        });
+      } catch (caught) {
+        console.warn(
+          "[consta] la investigación no se pudo guardar en bd",
+          caught,
+        );
+      }
+    },
+    [],
+  );
 
   const resetConnections = useCallback(() => {
     runRef.current += 1;
@@ -145,7 +176,7 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
         setError(
           caught instanceof IdentityApiError
             ? caught.message
-            : "No se pudo completar la investigación.",
+            : "The investigation could not be completed.",
         );
         setPhase("error");
       }
@@ -197,6 +228,11 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
         }
 
         if (runRef.current !== runId) return;
+        if (state) {
+          const candidate =
+            investigation.candidates.find((item) => item.id === candidateId) ?? null;
+          void persistAnalysis(name, details, interest, candidate, state);
+        }
         setConnectionPhase("ready");
       } catch (caught) {
         if (runRef.current !== runId) return;
@@ -208,13 +244,13 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
           // validación y 4xx quedan fuera.
           setConnectionRetryable(caught.retryable);
         } else {
-          setConnectionError("No se pudieron tejer las conexiones.");
+          setConnectionError("Connections could not be mapped.");
           setConnectionRetryable(false);
         }
         setConnectionPhase("error");
       }
     },
-    [],
+    [persistAnalysis],
   );
 
   const searchMore = useCallback(async () => {
@@ -243,7 +279,7 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
       setError(response.error?.message ?? null);
       setNotice(
         response.rounds.length === before
-          ? "Esos datos ya se buscaron o ya están en el perfil."
+          ? "Those fields were already searched or are already in the profile."
           : null,
       );
       setPhase("ready");
@@ -261,7 +297,7 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
       setError(
         caught instanceof IdentityApiError
           ? caught.message
-          : "No se pudo completar la búsqueda extra.",
+          : "The extra search could not be completed.",
       );
       setPhase("ready");
     }
@@ -367,16 +403,27 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
 
         if (runRef.current !== runId) return;
 
-        setConnection({
+        const nextState: IdentityConnectionState = {
           claims: response.claims,
           rounds: response.rounds,
           summary: response.summary,
           canContinue: response.canContinue,
           stoppedReason: response.stoppedReason,
-        });
+        };
+        setConnection(nextState);
         setConnectionError(response.error?.message ?? null);
         setConnectionRetryable(response.error?.retryable === true);
         setConnectionPhase("ready");
+
+        const candidate =
+          result.candidates.find((item) => item.id === confirmedId) ?? null;
+        void persistAnalysis(
+          consultedName,
+          consultedDetails,
+          consultedInterest,
+          candidate,
+          nextState,
+        );
       } catch (caught) {
         if (runRef.current !== runId) return;
 
@@ -385,13 +432,13 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
           setConnectionError(caught.message);
           setConnectionRetryable(caught.retryable);
         } else {
-          setConnectionError("No se pudo profundizar en esa rama.");
+          setConnectionError("That branch could not be followed.");
           setConnectionRetryable(false);
         }
         setConnectionPhase("error");
       }
     },
-    [confirmedId, connection, connectionPhase, consultedDetails, consultedInterest, consultedName, result],
+    [confirmedId, connection, connectionPhase, consultedDetails, consultedInterest, consultedName, persistAnalysis, result],
   );
 
   const value = useMemo(

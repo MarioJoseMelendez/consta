@@ -1,34 +1,36 @@
 import type { Metadata, Viewport } from "next";
+import { Inter } from "next/font/google";
 
-import Footer from "@/components/Footer";
 import Header from "@/components/Header";
 
 import "./globals.css";
 
+const inter = Inter({
+  subsets: ["latin"],
+  display: "swap",
+});
+
 export const metadata: Metadata = {
   title: {
-    default: "Consta — Del registro a la conexión",
+    default: "Consta",
     template: "%s · Consta",
   },
-  description:
-    "Investigación de registros públicos para Guatemala. Identidades, vínculos y evidencia citada, con la fuente y la licencia a la vista.",
+  description: "Public-record identity investigation. Named people, companies, and cited sources.",
   applicationName: "Consta",
   keywords: [
-    "registros públicos",
-    "Guatemala",
-    "RGAE",
-    "Guatecompras",
-    "investigación",
-    "datos abiertos",
+    "public records",
+    "identity",
+    "investigation",
+    "open data",
   ],
   icons: {
     icon: [{ url: "/favicon.svg", type: "image/svg+xml" }],
   },
   openGraph: {
-    title: "Consta — Del registro a la conexión",
+    title: "Consta",
     description:
-      "Cruza registros de proveedores, representantes legales y compras públicas. Cada vínculo conserva su evidencia.",
-    locale: "es_GT",
+      "Investigate a public identity, then map the connections the sources can support.",
+    locale: "en_US",
     type: "website",
     siteName: "Consta",
   },
@@ -37,8 +39,8 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#0b0f0e",
-  colorScheme: "dark",
+  themeColor: "#eef3ea",
+  colorScheme: "light",
 };
 
 export default function RootLayout({
@@ -47,16 +49,15 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="es-GT">
-      <body>
+    <html lang="en">
+      <body className={inter.className}>
         <a className="skip-link" href="#contenido">
-          Saltar al contenido
+          Skip to content
         </a>
         <Header />
         <main id="contenido" className="site-main">
           {children}
         </main>
-        <Footer />
       </body>
     </html>
   );

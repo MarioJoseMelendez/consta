@@ -6,7 +6,7 @@ import IdentityProvider from "@/components/identity/IdentityProvider";
 
 export const metadata: Metadata = {
   title: { absolute: "Consta" },
-  description: "Investigación de identidad.",
+  description: "Investigate a public identity.",
 };
 
 export default function HomePage() {

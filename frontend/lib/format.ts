@@ -1,17 +1,17 @@
 import type { EntityKind, IdentityStatus, RelationshipType } from "@consta/contracts";
 
 const IDENTITY_LABELS: Record<IdentityStatus, string> = {
-  confirmed: "Confirmado",
+  confirmed: "Confirmed",
   probable: "Probable",
-  unresolved: "Sin resolver",
-  no_match: "Sin coincidencia",
+  unresolved: "Unresolved",
+  no_match: "No match",
 };
 
 const KIND_LABELS: Record<EntityKind, string> = {
-  company: "Empresa",
-  person: "Persona",
-  agency: "Entidad pública",
-  unknown: "Entidad",
+  company: "Company",
+  person: "Person",
+  agency: "Public body",
+  unknown: "Entity",
 };
 
 const RELATIONSHIP_LABELS: Record<RelationshipType, string> = {
@@ -50,7 +50,7 @@ export function identityStatusLabel(status: IdentityStatus): string {
 }
 
 export function entityKindLabel(kind: EntityKind): string {
-  return KIND_LABELS[kind] ?? "Entidad";
+  return KIND_LABELS[kind] ?? "Entity";
 }
 
 export function relationshipTypeLabel(type: RelationshipType): string {

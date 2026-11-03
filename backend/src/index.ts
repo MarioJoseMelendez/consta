@@ -9,6 +9,7 @@ import type {
   ApiError,
   EntityBundle,
   Evidence,
+  IdentityAnalysisSaveRequest,
   IdentityConnectionState,
   IdentityInvestigation,
   Relationship,
@@ -26,6 +27,10 @@ import {
   investigateIdentityConnections,
   requestExtraIdentitySearch,
 } from "./identity";
+import {
+  resolveOccupationImage,
+  saveIdentityAnalysis,
+} from "./db";
 
 interface Bindings {
   ENVIRONMENT?: string;
@@ -46,6 +51,9 @@ interface Bindings {
   NVIDIA_API_KEY?: string;
   NVIDIA_BASE_URL?: string;
   NVIDIA_MODEL?: string;
+  DB?: D1Database;
+  IMAGE_PROVIDER?: string;
+  IMAGE_MODEL?: string;
 }
 
 type AppContext = Context<{ Bindings: Bindings }>;
@@ -225,7 +233,7 @@ app.get("/", (c) =>
     service: SERVICE_NAME,
     version: SERVICE_VERSION,
     description:
-      "API de Consta para investigación de registros públicos. Las rutas de entidades y análisis están en modo demo. POST /identity/investigate, /identity/more y /identity/connections consultan fuentes públicas y no envían X-Consta-Demo.",
+      "API de Consta para investigación de registros públicos. Las rutas de entidades y análisis están en modo demo. POST /identity/investigate, /identity/more y /identity/connections consultan fuentes públicas y no envían X-Consta-Demo. POST /identity/analysis guarda la investigación en la base compartida y GET /occupation-image sirve el pixel art de una ocupación.",
     demo: true,
     links: {
       manifest: "/manifest",
@@ -245,6 +253,8 @@ app.get("/", (c) =>
       "POST /identity/investigate",
       "POST /identity/more",
       "POST /identity/connections",
+      "POST /identity/analysis",
+      "GET /occupation-image?name=",
     ],
   }),
 );
@@ -779,6 +789,166 @@ app.post("/identity/connections", async (c) => {
   }
 
   return c.json(result, result.error ? 502 : 200);
+});
+
+app.post("/identity/analysis", async (c) => {
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(apiError("invalid_json", "El cuerpo de la solicitud debe ser JSON válido."), 400);
+  }
+
+  if (!isRecord(body)) {
+    return c.json(apiError("invalid_body", "El cuerpo debe ser un objeto JSON."), 400);
+  }
+  if (typeof body.name !== "string" || !body.name.trim()) {
+    return c.json(apiError("missing_parameter", 'Se requiere "name".'), 400);
+  }
+  if (body.details !== undefined && typeof body.details !== "string") {
+    return c.json(apiError("invalid_parameter", '"details" debe ser una cadena.'), 400);
+  }
+  if (body.interest !== undefined && typeof body.interest !== "string") {
+    return c.json(apiError("invalid_parameter", '"interest" debe ser una cadena.'), 400);
+  }
+
+  const connection = body.connection;
+  if (
+    !isRecord(connection) ||
+    !Array.isArray(connection.claims) ||
+    !Array.isArray(connection.rounds) ||
+    !isRecord(connection.summary) ||
+    typeof connection.canContinue !== "boolean"
+  ) {
+    return c.json(
+      apiError(
+        "invalid_parameter",
+        'Se requiere "connection" con claims y rounds como listas, summary como objeto y canContinue booleano.',
+      ),
+      400,
+    );
+  }
+
+  const candidate = body.candidate;
+  if (
+    candidate !== undefined &&
+    candidate !== null &&
+    (!isRecord(candidate) || typeof candidate.label !== "string")
+  ) {
+    return c.json(
+      apiError("invalid_parameter", '"candidate" debe ser una ficha válida o null.'),
+      400,
+    );
+  }
+
+  const name = body.name.trim();
+  const details = typeof body.details === "string" ? body.details.trim() : undefined;
+  const interest = typeof body.interest === "string" ? body.interest.trim() : undefined;
+
+  if (name.length > IDENTITY_NAME_MAX) {
+    return c.json(
+      apiError("invalid_parameter", `"name" no puede superar ${IDENTITY_NAME_MAX} caracteres.`),
+      400,
+    );
+  }
+  if (details && details.length > IDENTITY_DETAILS_MAX) {
+    return c.json(
+      apiError(
+        "invalid_parameter",
+        `"details" no puede superar ${IDENTITY_DETAILS_MAX} caracteres.`,
+      ),
+      400,
+    );
+  }
+  if (interest && interest.length > IDENTITY_INTEREST_MAX) {
+    return c.json(
+      apiError(
+        "invalid_parameter",
+        `"interest" no puede superar ${IDENTITY_INTEREST_MAX} caracteres.`,
+      ),
+      400,
+    );
+  }
+
+  if (!c.env.DB) {
+    return c.json(
+      apiError("db_unavailable", "La base de investigaciones no está configurada."),
+      503,
+    );
+  }
+
+  try {
+    const result = await saveIdentityAnalysis(c.env.DB, {
+      name,
+      ...(details ? { details } : {}),
+      ...(interest ? { interest } : {}),
+      candidate: isRecord(candidate)
+        ? (candidate as unknown as IdentityAnalysisSaveRequest["candidate"])
+        : null,
+      connection: connection as unknown as IdentityConnectionState,
+    });
+    return c.json(result, result.created ? 201 : 200);
+  } catch {
+    return c.json(
+      apiError(
+        "save_failed",
+        "La investigación no se pudo guardar en la base compartida.",
+        true,
+      ),
+      500,
+    );
+  }
+});
+
+/** Sirve una imagen pixel art. El caché es inmutable: la clave es el cargo. */
+function occupationImageResponse(
+  image: {
+    mime: string;
+    width: number;
+    height: number;
+    bytes: ArrayBuffer;
+  },
+  meta?: { occupation?: string; cached?: boolean },
+): Response {
+  const headers: Record<string, string> = {
+    "content-type": image.mime,
+    "cache-control": "public, max-age=31536000, immutable",
+    "x-image-width": String(image.width),
+    "x-image-height": String(image.height),
+  };
+  // Ayuda a comprobar en desarrollo qué cargo se reutilizó y si vino del caché.
+  if (meta?.occupation) {
+    headers["x-image-occupation"] = encodeURIComponent(meta.occupation);
+  }
+  if (meta?.cached !== undefined) {
+    headers["x-image-cached"] = meta.cached ? "1" : "0";
+  }
+  return new Response(image.bytes, { status: 200, headers });
+}
+
+app.get("/occupation-image", async (c) => {
+  const name = (c.req.query("name") ?? "").trim();
+  if (!name) {
+    return c.json(apiError("missing_parameter", 'Se requiere "name".'), 400);
+  }
+  if (name.length > IDENTITY_NAME_MAX) {
+    return c.json(
+      apiError("invalid_parameter", `"name" no puede superar ${IDENTITY_NAME_MAX} caracteres.`),
+      400,
+    );
+  }
+
+  const resolved = await resolveOccupationImage(c.env.DB, c.env, name);
+  if (!resolved) {
+    return c.json(
+      apiError("invalid_parameter", '"name" no contiene una ocupación válida.'),
+      400,
+    );
+  }
+  return occupationImageResponse(resolved.image, {
+    occupation: resolved.occupation,
+    cached: resolved.cached,
+  });
 });
 
 app.notFound((c) =>

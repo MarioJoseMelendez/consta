@@ -1,4 +1,5 @@
 import type {
+  IdentityAnalysisSaveRequest,
   IdentityClaim,
   IdentityConnectionRound,
   IdentityConnectionState,
@@ -18,6 +19,13 @@ const API_BASE = (
 export const IDENTITY_TIMEOUT_MS = 300_000;
 /** Una vuelta de conexiones puede tardar más: búsquedas + scoring + modelo. */
 export const CONNECTION_TIMEOUT_MS = 300_000;
+/** El guardado es una escritura corta; no debe retener la interfaz. */
+export const SAVE_TIMEOUT_MS = 20_000;
+
+/** URL del pixel art de una ocupación. La misma ocupación se cachea. */
+export function occupationImageUrl(occupation: string): string {
+  return `${API_BASE}/occupation-image?name=${encodeURIComponent(occupation)}`;
+}
 
 export class IdentityApiError extends Error {
   readonly code: string;
@@ -360,6 +368,54 @@ export async function requestIdentityConnections(
       true,
       null,
     );
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Guarda la investigación en la base compartida. Es best-effort: quien llama
+ * decide si un fallo debe mostrarse o solo registrarse.
+ */
+export async function saveIdentityAnalysis(
+  input: IdentityAnalysisSaveRequest,
+): Promise<void> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SAVE_TIMEOUT_MS);
+  const details = input.details?.trim();
+  const interest = input.interest?.trim();
+
+  try {
+    const response = await fetch(`${API_BASE}/identity/analysis`, {
+      method: "POST",
+      cache: "no-store",
+      signal: controller.signal,
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        name: input.name.trim(),
+        ...(details ? { details } : {}),
+        ...(interest ? { interest } : {}),
+        candidate: input.candidate ?? null,
+        connection: input.connection,
+      }),
+    });
+
+    if (!response.ok) {
+      let payload: unknown = null;
+      try {
+        payload = (await response.json()) as unknown;
+      } catch {
+        payload = null;
+      }
+      const failure = readError(payload);
+      throw new Error(
+        failure?.message ??
+          `La investigación no se pudo guardar (${response.status}).`,
+      );
+    }
   } finally {
     clearTimeout(timeout);
   }

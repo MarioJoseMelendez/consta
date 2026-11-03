@@ -2,9 +2,6 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
-  identityConfidenceLabel,
-  identitySourceTierLabel,
-  identityTypeLabel,
   type EntityKind,
   type GraphEdge as MapEdge,
   type GraphNode as MapNode,
@@ -19,7 +16,12 @@ import {
 } from "@consta/contracts";
 
 import NetworkMap from "../Graph";
-import IdentityProfileFields from "./IdentityProfile";
+import IdentityProfileFields, {
+  OccupationPhoto,
+  identityConfidenceLabelEn,
+  identityFieldOf,
+  identityTypeLabelEn,
+} from "./IdentityProfile";
 
 export interface BranchRequest {
   entityId?: string;
@@ -45,49 +47,49 @@ interface ClaimsWebProps {
  * relación más clara del par; la tabla lista cada afirmación.
  */
 const RELATION_RULES: ReadonlyArray<readonly [RegExp, string]> = [
-  [/\bmedio herman[oa]s?\b/, "medio hermano/a"],
-  [/\bhermanastr[oa]s?\b/, "hermanastro/a"],
-  [/\bherman[oa]s?\b/, "hermano/a"],
-  [/\bhijastr[oa]s?\b/, "hijastro/a"],
-  [/\bhij[oa]s?\b/, "hijo/a"],
-  [/\bpadrastro\b/, "padrastro"],
-  [/\bmadrastra\b/, "madrastra"],
-  [/\bpadres?\b/, "padre"],
-  [/\bmadres?\b/, "madre"],
-  [/\b(?:esposo|esposa|conyuge|marido|pareja)\b/, "cónyuge"],
-  [/\bprim[oa]s?\b/, "primo/a"],
-  [/\b(?:tio|tia)s?\b/, "tío/a"],
-  [/\bsobrin[oa]s?\b/, "sobrino/a"],
-  [/\babuel[oa]s?\b/, "abuelo/a"],
-  [/\bniet[oa]s?\b/, "nieto/a"],
-  [/\bsuegr[oa]s?\b/, "suegro/a"],
-  [/\bcunad[oa]s?\b/, "cuñado/a"],
-  [/\brepresentantes? legal(?:es)?\b/, "representante legal"],
-  [/\bviceministr[oa]s?\b/, "viceministro/a"],
-  [/\bministr[oa]s?\b/, "ministro/a"],
-  [/\bsoci[oa]s?\b/, "socio/a"],
-  [/\baccionistas?\b/, "accionista"],
-  [/\bfundador(?:a|es|as)?\b/, "fundador/a"],
-  [/\bgerentes?\b/, "gerente"],
-  [/\bdirector(?:a|es|as)?\b/, "director/a"],
-  [/\bpresident[ea]s?\b/, "presidente"],
-  [/\balcaldesa\b|\balcaldes?\b/, "alcalde/sa"],
-  [/\bgobernador(?:a|es|as)?\b/, "gobernador/a"],
-  [/\bcongresistas?\b/, "congresista"],
-  [/\bsenador(?:a|es|as)?\b/, "senador/a"],
-  [/\bdiputad[oa]s?\b/, "diputado/a"],
-  [/\bconcejal(?:a|es|as)?\b/, "concejal"],
-  [/\bcontratistas?\b/, "contratista"],
-  [/\badjudic\w*\b/, "adjudicación"],
-  [/\bcontratos?\b/, "contrato"],
-  [/\bproveedor(?:a|es|as)?\b/, "proveedor"],
-  [/\bemplead[oa]s?\b/, "empleado/a"],
-  [/\basesor(?:a|es|as)?\b/, "asesor/a"],
-  [/\babogad[oa]s?\b/, "abogado/a"],
-  [/\bapoderad[oa]s?\b/, "apoderado/a"],
-  [/\btestaferro\b/, "testaferro"],
-  [/\bsecretari[oa]s?\b/, "secretario/a"],
-  [/\bembajador(?:a|es|as)?\b/, "embajador/a"],
+  [/\bmedio herman[oa]s?\b/, "half-sibling"],
+  [/\bhermanastr[oa]s?\b/, "step-sibling"],
+  [/\bherman[oa]s?\b/, "sibling"],
+  [/\bhijastr[oa]s?\b/, "stepchild"],
+  [/\bhij[oa]s?\b/, "child"],
+  [/\bpadrastro\b/, "stepfather"],
+  [/\bmadrastra\b/, "stepmother"],
+  [/\bpadres?\b/, "father"],
+  [/\bmadres?\b/, "mother"],
+  [/\b(?:esposo|esposa|conyuge|marido|pareja)\b/, "spouse"],
+  [/\bprim[oa]s?\b/, "cousin"],
+  [/\b(?:tio|tia)s?\b/, "uncle/aunt"],
+  [/\bsobrin[oa]s?\b/, "niece/nephew"],
+  [/\babuel[oa]s?\b/, "grandparent"],
+  [/\bniet[oa]s?\b/, "grandchild"],
+  [/\bsuegr[oa]s?\b/, "parent-in-law"],
+  [/\bcunad[oa]s?\b/, "sibling-in-law"],
+  [/\brepresentantes? legal(?:es)?\b/, "legal representative"],
+  [/\bviceministr[oa]s?\b/, "deputy minister"],
+  [/\bministr[oa]s?\b/, "minister"],
+  [/\bsoci[oa]s?\b/, "partner"],
+  [/\baccionistas?\b/, "shareholder"],
+  [/\bfundador(?:a|es|as)?\b/, "founder"],
+  [/\bgerentes?\b/, "manager"],
+  [/\bdirector(?:a|es|as)?\b/, "director"],
+  [/\bpresident[ea]s?\b/, "president"],
+  [/\balcaldesa\b|\balcaldes?\b/, "mayor"],
+  [/\bgobernador(?:a|es|as)?\b/, "governor"],
+  [/\bcongresistas?\b/, "member of congress"],
+  [/\bsenador(?:a|es|as)?\b/, "senator"],
+  [/\bdiputad[oa]s?\b/, "deputy"],
+  [/\bconcejal(?:a|es|as)?\b/, "councilor"],
+  [/\bcontratistas?\b/, "contractor"],
+  [/\badjudic\w*\b/, "award"],
+  [/\bcontratos?\b/, "contract"],
+  [/\bproveedor(?:a|es|as)?\b/, "supplier"],
+  [/\bemplead[oa]s?\b/, "employee"],
+  [/\basesor(?:a|es|as)?\b/, "advisor"],
+  [/\babogad[oa]s?\b/, "lawyer"],
+  [/\bapoderad[oa]s?\b/, "attorney-in-fact"],
+  [/\btestaferro\b/, "front person"],
+  [/\bsecretari[oa]s?\b/, "secretary"],
+  [/\bembajador(?:a|es|as)?\b/, "ambassador"],
 ];
 
 /** Misma normalización que usa el backend para resolver `parentText`. */
@@ -110,13 +112,23 @@ function entityKey(entity: IdentityEntity): string {
 }
 
 function sourceName(source: IdentitySourceRef): string {
-  return source.source === "tavily" ? "Tavily" : "Wikidata";
+  if (source.source === "tavily") return "Tavily";
+  if (source.source === "bd") return "BD";
+  return "Wikidata";
 }
 
 function sourceMeta(source: IdentitySourceRef): string {
   const parts = [sourceName(source)];
-  if (source.tier) parts.push(identitySourceTierLabel(source.tier));
-  if (source.official) parts.push("oficial");
+  if (source.tier) {
+    parts.push(
+      source.tier === "primary"
+        ? "Primary"
+        : source.tier === "secondary"
+          ? "Secondary"
+          : "Tertiary",
+    );
+  }
+  if (source.official) parts.push("official");
   return parts.join(" · ");
 }
 
@@ -271,6 +283,7 @@ interface GraphNode {
   label: string;
   type: IdentityEntity["type"];
   description: string;
+  occupation: string | null;
   round: number;
   sources: IdentitySourceRef[];
   /** Afirmaciones que mencionan esta identidad. */
@@ -315,9 +328,13 @@ function subjectOf(
   const type = candidateType(candidate);
   return {
     id: entity ? entityKey(entity) : "subject",
-    label: entity?.label || candidate?.label || "Sujeto",
+    label: entity?.label || candidate?.label || "Subject",
     type: type !== "unknown" ? type : (entity?.type ?? "unknown"),
     description: entity?.description || candidate?.description || "",
+    occupation:
+      (candidate ? identityFieldOf(candidate, "occupation").value : null) ??
+      entity?.occupation ??
+      null,
     round: 0,
     sources: uniqueSources(entity?.sources ?? []),
     claims: [],
@@ -356,9 +373,10 @@ function buildGraph(
       if (!node) {
         node = {
           id: entityKey(entity),
-          label: entity.label || entity.description || "Sin nombre",
+          label: entity.label || entity.description || "Unnamed",
           type: entity.type,
           description: entity.description,
+          occupation: entity.occupation ?? null,
           round: claim.round,
           sources: uniqueSources(entity.sources),
           claims: [claim],
@@ -371,6 +389,9 @@ function buildGraph(
         node.sources = uniqueSources([...node.sources, ...entity.sources]);
         if (!node.description && entity.description) {
           node.description = entity.description;
+        }
+        if (!node.occupation && entity.occupation) {
+          node.occupation = entity.occupation;
         }
         if (!node.profile && entity.profile) node.profile = entity.profile;
         if (!node.claims.some((item) => item.id === claim.id)) {
@@ -476,8 +497,8 @@ function relationshipTypeOf(relation: string): RelationshipType {
 
 function edgeLabelOf(edge: GraphEdge): string {
   if (edge.relation) return edge.relation;
-  if (edge.claims.length > 1) return `${edge.claims.length} afirmaciones`;
-  return "conexión";
+  if (edge.claims.length > 1) return `${edge.claims.length} claims`;
+  return "connection";
 }
 
 function toMapGraph(graph: Graph): { nodes: MapNode[]; edges: MapEdge[] } {
@@ -519,7 +540,7 @@ function affirmationRows(
 ): AffirmationRow[] {
   const index = claimIndex(allClaims);
   const rows: AffirmationRow[] = [];
-  const subject = subjectLabel || "Sujeto";
+  const subject = subjectLabel || "Subject";
 
   for (const claim of claims) {
     const entities = uniqueEntities([...claim.entities], subjectLabel);
@@ -615,17 +636,17 @@ function AffirmationTable({
       <table className="claim-evidence-table claim-affirmations-table">
         <caption className="sr-only">
           {pair
-            ? `Afirmaciones que conectan a ${pair.from} con ${pair.to}`
-            : "Afirmaciones que conectan al sujeto con cada identidad"}
+            ? `Claims connecting ${pair.from} with ${pair.to}`
+            : "Claims connecting the subject with each identity"}
         </caption>
         <thead>
           <tr>
-            {showClaim ? <th scope="col">Afirmación</th> : null}
-            <th scope="col">Desde</th>
-            <th scope="col">Relación</th>
-            <th scope="col">Hacia</th>
-            <th scope="col">Confianza</th>
-            <th scope="col">Fuentes</th>
+            {showClaim ? <th scope="col">Claim</th> : null}
+            <th scope="col">From</th>
+            <th scope="col">Relation</th>
+            <th scope="col">To</th>
+            <th scope="col">Confidence</th>
+            <th scope="col">Sources</th>
           </tr>
         </thead>
         <tbody>
@@ -656,8 +677,16 @@ function AffirmationTable({
                     className="claim-thread-badge"
                     data-confidence={row.claim.confidence}
                   >
-                    {identityConfidenceLabel(row.claim.confidence)}
+                    {identityConfidenceLabelEn(row.claim.confidence)}
                   </span>
+                  {row.claim.saved ? (
+                    <span
+                      className="claim-bd-badge"
+                      title={`Reutilizada de la base: ${row.claim.saved.subject}`}
+                    >
+                      BD
+                    </span>
+                  ) : null}
                   {typeof row.claim.score === "number" && row.claim.score > 1 ? (
                     <span className="claim-row-score">{row.claim.score}</span>
                   ) : null}
@@ -691,15 +720,6 @@ function AffirmationTable({
    Tarjeta de una identidad del mapa: lo que el loop ya encontró
    -------------------------------------------------------------------------- */
 
-function initialsOf(label: string): string {
-  const words = label
-    .split(/\s+/)
-    .map((word) => word.replace(/[^\p{L}\p{N}]/gu, ""))
-    .filter((word) => word.length > 1);
-  const picked = words.slice(0, 2).map((word) => word[0]?.toUpperCase() ?? "");
-  return picked.join("") || label.slice(0, 1).toUpperCase();
-}
-
 function IdentityDetail({
   node,
   onInvestigate,
@@ -715,18 +735,21 @@ function IdentityDetail({
     ...node.sources,
     ...node.claims.flatMap((claim) => claim.sources),
   ]);
+  const occupation =
+    node.occupation ??
+    (node.profile ? identityFieldOf(node.profile, "occupation").value : null);
 
   return (
     <div className="claim-evidence claim-node-detail">
       <div className="claim-node-head">
         <span className="claim-card-photo claim-node-photo" aria-hidden="true">
-          <span className="claim-card-initials">{initialsOf(node.label)}</span>
+          <OccupationPhoto label={node.label} occupation={occupation} />
         </span>
         <div>
           <h4 className="claim-node-title">{node.label}</h4>
           <p className="claim-node-meta">
-            {identityTypeLabel(node.type)}
-            {node.round > 0 ? ` · Vuelta ${node.round}` : ""}
+            {identityTypeLabelEn(node.type)}
+            {node.round > 0 ? ` · Round ${node.round}` : ""}
           </p>
         </div>
       </div>
@@ -735,20 +758,20 @@ function IdentityDetail({
         <p className="claim-node-description">{node.description}</p>
       ) : (
         <p className="claim-node-open">
-          La investigación aún no dejó una descripción de esta identidad.
+          The investigation has not left a description of this identity yet.
         </p>
       )}
 
       {node.profile ? (
         <div className="claim-node-profile">
-          <p className="mono-label">Ficha de identidad</p>
+          <p className="mono-label">Identity card</p>
           <IdentityProfileFields candidate={node.profile} />
         </div>
       ) : null}
 
       {sources.length > 0 ? (
         <div className="claim-node-sources">
-          <p className="mono-label">Fuentes de la identidad</p>
+          <p className="mono-label">Identity sources</p>
           <ul className="claim-row-sources">
             {sources.map((source) => (
               <li key={source.url}>
@@ -770,12 +793,12 @@ function IdentityDetail({
             disabled={busy}
             onClick={() => onInvestigate({ entityId: node.id, label: node.label })}
           >
-            Investigar esta identidad
+            Investigate this identity
           </button>
         ) : null}
         {onSelectSubject ? (
           <button type="button" className="claim-detail-close" onClick={onSelectSubject}>
-            Ver perfil del sujeto
+            View subject profile
           </button>
         ) : null}
       </div>
@@ -858,16 +881,16 @@ export default function ClaimsWeb({
     <section className="claims-web" aria-labelledby={`${headingBase}-title`}>
       <header className="claims-web-head">
         <p className="mono-label" id={`${headingBase}-title`}>
-          Red de conexiones
+          Connection network
         </p>
         {summary.text ? <p className="claims-web-lead">{summary.text}</p> : null}
         <p className="claims-web-meta">
-          {claimCount} {claimCount === 1 ? "afirmación" : "afirmaciones"}
+          {claimCount} {claimCount === 1 ? "claim" : "claims"}
           {graph.edges.length > 0
-            ? ` · ${graph.edges.length} ${graph.edges.length === 1 ? "hilo" : "hilos"}`
+            ? ` · ${graph.edges.length} ${graph.edges.length === 1 ? "thread" : "threads"}`
             : ""}
           {roundCount > 0
-            ? ` · ${roundCount} ${roundCount === 1 ? "vuelta" : "vueltas"}`
+            ? ` · ${roundCount} ${roundCount === 1 ? "round" : "rounds"}`
             : ""}
         </p>
       </header>
@@ -890,18 +913,18 @@ export default function ClaimsWeb({
             }}
             onSelectEdge={openEdge}
             compact
-            theme="ink"
-            hint="Haz clic en un hilo para ver las afirmaciones. Haz clic en un sujeto para abrir su tarjeta."
+            theme="paper"
+            hint="Click a thread to read the claims. Click a person or company to open their card."
             statusLegend={{
-              confirmed: "Corroborado",
+              confirmed: "Corroborated",
               probable: "Probable",
-              unresolved: "Incierto",
+              unresolved: "Uncertain",
             }}
           />
         </div>
       ) : (
         <p className="claims-empty">
-          Todavía no hay identidades suficientes para dibujar el mapa.
+          Not enough identities yet to draw the map.
         </p>
       )}
 
@@ -909,14 +932,14 @@ export default function ClaimsWeb({
         <section
           className="claim-detail"
           ref={detailRef}
-          aria-label={activeEdge ? "Afirmaciones de la conexión" : "Ficha de la identidad"}
+          aria-label={activeEdge ? "Connection claims" : "Identity card"}
         >
           <div className="claim-detail-head">
             <p className="mono-label">
-              {activeEdge ? "Afirmaciones de la conexión" : "Ficha de la identidad"}
+              {activeEdge ? "Connection claims" : "Identity card"}
             </p>
             <button type="button" className="claim-detail-close" onClick={clearSelection}>
-              Cerrar
+              Close
             </button>
           </div>
 
@@ -929,7 +952,7 @@ export default function ClaimsWeb({
                 </span>
                 <span className="claim-thread-meta">
                   {activeEdge.claims.length}{" "}
-                  {activeEdge.claims.length === 1 ? "afirmación" : "afirmaciones"}
+                  {activeEdge.claims.length === 1 ? "claim" : "claims"}
                 </span>
               </div>
 
@@ -948,7 +971,7 @@ export default function ClaimsWeb({
                   className="claim-detail-close"
                   onClick={() => openNode(activeEdge.to)}
                 >
-                  Ver ficha de {activeEdge.toLabel}
+                  Open card for {activeEdge.toLabel}
                 </button>
                 {onInvestigate ? (
                   <button
@@ -962,7 +985,7 @@ export default function ClaimsWeb({
                       })
                     }
                   >
-                    Investigar esta conexión
+                    Investigate this connection
                   </button>
                 ) : null}
               </div>
@@ -980,7 +1003,7 @@ export default function ClaimsWeb({
 
       {claimCount === 0 ? (
         <p className="claims-empty">
-          Todavía no hay afirmaciones sostenidas por una fuente.
+          No sourced claims yet.
         </p>
       ) : null}
     </section>

@@ -1,32 +1,14 @@
-import type { Metadata } from "next";
-import { Suspense } from "react";
+"use client";
 
-import Workspace from "@/components/workspace/Workspace";
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 
-export const metadata: Metadata = {
-  title: "Workspace",
-  description:
-    "Investiga identidades, vínculos y evidencia en registros públicos. Workspace de demostración de Consta.",
-};
+export default function WorkspaceRedirect() {
+  const router = useRouter();
 
-function WorkspaceFallback() {
-  return (
-    <div className="shell workspace-loading">
-      <div>
-        <span className="mono-label">Workspace</span>
-        <p>Cargando el expediente…</p>
-        <div className="loading-bar" aria-hidden="true">
-          <span />
-        </div>
-      </div>
-    </div>
-  );
-}
+  useEffect(() => {
+    router.replace("/");
+  }, [router]);
 
-export default function WorkspacePage() {
-  return (
-    <Suspense fallback={<WorkspaceFallback />}>
-      <Workspace />
-    </Suspense>
-  );
+  return null;
 }

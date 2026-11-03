@@ -26,6 +26,10 @@ export interface GeneralEnv {
   NVIDIA_API_KEY?: string;
   NVIDIA_BASE_URL?: string;
   NVIDIA_MODEL?: string;
+  /** Binding D1 de la base compartida de investigaciones e imágenes. */
+  DB?: D1Database;
+  IMAGE_PROVIDER?: string;
+  IMAGE_MODEL?: string;
 }
 
 export interface GeneralError {

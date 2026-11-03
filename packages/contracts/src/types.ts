@@ -187,7 +187,7 @@ export interface ApiError {
    Identidad — flujo de resolución
    -------------------------------------------------------------------------- */
 
-export type IdentitySource = "tavily" | "wikidata";
+export type IdentitySource = "tavily" | "wikidata" | "bd";
 
 export type IdentityProfileType = "person" | "enterprise" | "unknown";
 
@@ -272,6 +272,20 @@ export interface IdentityPlan {
   queries: IdentityPlanQuery[];
 }
 
+/**
+ * Referencia a una afirmación que ya vive en la base de investigaciones.
+ * `sources` son las fuentes originales con las que se guardó; nunca apunta a
+ * `bd` como fuente, para no corroborar una afirmación consigo misma.
+ */
+export interface IdentitySavedRef {
+  analysisId: string;
+  subject: string;
+  claimId: string;
+  confidence: IdentityConfidence;
+  score: number;
+  sources: IdentitySourceRef[];
+}
+
 export interface IdentitySearchItem {
   source: IdentitySource;
   title: string;
@@ -279,6 +293,8 @@ export interface IdentitySearchItem {
   snippet?: string;
   publishedDate?: string;
   license?: string;
+  /** Solo cuando `source` es "bd": la afirmación guardada que devolvió la base. */
+  saved?: IdentitySavedRef;
 }
 
 export interface IdentitySearchError {
@@ -336,6 +352,8 @@ export interface IdentityEntity {
   type: IdentityProfileType;
   /** Contexto breve: quién es o qué institución es. */
   description: string;
+  /** Ocupación o cargo si la fuente lo nombra; alimenta el pixel art. */
+  occupation?: string | null;
   sources: IdentitySourceRef[];
   score: number | null;
   confidence: IdentityConfidence | null;
@@ -364,6 +382,8 @@ export interface IdentityClaim {
   confidence: IdentityConfidence;
   /** 0 es la afirmación raíz; 1..3 son las vueltas del loop. */
   round: number;
+  /** Presente cuando la afirmación se reutilizó de la base de investigaciones. */
+  saved?: IdentitySavedRef;
 }
 
 export interface IdentityConnectionRound {
@@ -409,5 +429,31 @@ export interface IdentityConnectionsRequest {
 }
 
 export interface IdentityConnectionsResponse extends IdentityConnectionState {
+  error?: ApiError["error"];
+}
+
+/* --------------------------------------------------------------------------
+   Identidad — base de investigaciones guardadas (`bd`)
+   -------------------------------------------------------------------------- */
+
+/**
+ * Guarda el resultado de una investigación: sujeto, conexiones y todas las
+ * afirmaciones con sus fuentes, score y corroborancia. El backend lo usa para
+ * deduplicar por contenido y alimentar la herramienta `bd`.
+ */
+export interface IdentityAnalysisSaveRequest {
+  name: string;
+  details?: string;
+  interest?: string;
+  candidate?: IdentityCandidate | null;
+  connection: IdentityConnectionState;
+}
+
+export interface IdentityAnalysisSaveResponse {
+  id: string;
+  /** `false` si ya existía un análisis idéntico y solo se actualizó. */
+  created: boolean;
+  claims: number;
+  entities: number;
   error?: ApiError["error"];
 }

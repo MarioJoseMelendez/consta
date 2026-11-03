@@ -26,7 +26,7 @@ export default function IdentityForm() {
   return (
     <form className="identity-form" onSubmit={handleSubmit}>
       <div className="identity-field">
-        <label htmlFor={nameId}>Nombre</label>
+        <label htmlFor={nameId}>Name</label>
         <div className="identity-name">
           <IconSearch width={18} height={18} />
           <input
@@ -38,7 +38,7 @@ export default function IdentityForm() {
             required
             autoComplete="off"
             spellCheck={false}
-            placeholder="Persona, empresa o institución"
+            placeholder="Person, company, or institution"
             disabled={loading}
             onChange={(event) => setName(event.target.value)}
           />
@@ -47,7 +47,7 @@ export default function IdentityForm() {
 
       <div className="identity-field">
         <label htmlFor={detailsId}>
-          Descripción <span>opcional</span>
+          Description <span>optional</span>
         </label>
         <textarea
           id={detailsId}
@@ -55,7 +55,7 @@ export default function IdentityForm() {
           value={details}
           maxLength={2000}
           rows={3}
-          placeholder="Lugar, periodo, cargo u otro contexto público. No sustituye a una fuente."
+          placeholder="Place, period, office, or other public context. This is not a source."
           disabled={loading}
           onChange={(event) => setDetails(event.target.value)}
         />
@@ -63,7 +63,7 @@ export default function IdentityForm() {
 
       <div className="identity-field">
         <label htmlFor={interestId}>
-          Interés de investigación <span>opcional</span>
+          Investigation interest <span>optional</span>
         </label>
         <textarea
           id={interestId}
@@ -71,14 +71,14 @@ export default function IdentityForm() {
           value={interest}
           maxLength={1000}
           rows={3}
-          placeholder="Qué quieres encontrar: contratos, partidos, empresas asociadas, apoyo externo. Si lo dejas vacío, se buscan conexiones de interés público."
+          placeholder="What to look for: contracts, parties, associated companies, outside support. Leave empty to follow public-interest ties."
           disabled={loading}
           onChange={(event) => setInterest(event.target.value)}
         />
       </div>
 
       <button type="submit" className="identity-submit" disabled={loading}>
-        <span>{loading ? "Buscando" : "Investigar"}</span>
+        <span>{loading ? "Searching" : "Investigate"}</span>
         <IconArrowRight width={16} height={16} />
       </button>
     </form>
