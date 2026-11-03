@@ -21,6 +21,7 @@ import {
   canContinueConnectionLoop,
   connectionBranches,
   connectionRoundBeat,
+  fallbackConnectionQueries,
   fillFromSearches,
   journalistInterestNote,
   mentionsEntity,
@@ -186,6 +187,43 @@ test("canContinueConnectionLoop: ronda 3 solo si hay ramas abiertas", () => {
     canContinueConnectionLoop({ finishedRound: 3, hasNewClaims: true, openCount: 2 }),
     false,
   );
+});
+
+test("fallbackConnectionQueries: ronda 2 parte de identidades ligadas", () => {
+  const queries = fallbackConnectionQueries({
+    round: 2,
+    subjectLabel: "Nexo Servicios, S.A.",
+    linked: ["A. Méndez", "Grupo Aurora, S.A."],
+    open: [],
+    priorKeys: new Set(),
+  });
+  assert.ok(queries.length >= 1);
+  assert.ok(queries.every((query) => query.tool === "tavily"));
+  assert.match(queries[0]?.query ?? "", /A\. Méndez|Grupo Aurora/);
+});
+
+test("fallbackConnectionQueries: ronda 3 cruza ramas abiertas con el sujeto", () => {
+  const queries = fallbackConnectionQueries({
+    round: 3,
+    subjectLabel: "Joseph Robinette Biden Jr.",
+    linked: ["Elon Reeve Musk"],
+    open: ["Sam Altman"],
+    priorKeys: new Set(),
+  });
+  assert.equal(queries.length, 1);
+  assert.match(queries[0]?.query ?? "", /Sam Altman/);
+  assert.match(queries[0]?.query ?? "", /Joseph Robinette Biden Jr\./);
+});
+
+test("fallbackConnectionQueries: ronda 1 no inventa búsquedas", () => {
+  const queries = fallbackConnectionQueries({
+    round: 1,
+    subjectLabel: "Nexo Servicios, S.A.",
+    linked: ["A. Méndez"],
+    open: [],
+    priorKeys: new Set(),
+  });
+  assert.equal(queries.length, 0);
 });
 
 test("journalistInterestNote: sin texto cae a interés público", () => {

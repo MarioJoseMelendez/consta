@@ -2833,6 +2833,46 @@ export function canContinueConnectionLoop(input: {
   return true;
 }
 
+/**
+ * Si el planificador se detiene o falla, la vuelta 2 y la 3 igual tienen
+ * nombres concretos que buscar. Sin esto el loop se queda en la primera.
+ */
+export function fallbackConnectionQueries(input: {
+  round: number;
+  subjectLabel: string;
+  linked: readonly string[];
+  open: readonly string[];
+  priorKeys: ReadonlySet<string>;
+}): IdentityToolQuery[] {
+  const beat = connectionRoundBeat(input.round);
+  const names =
+    beat === "close-subject"
+      ? input.open
+      : beat === "expand-second"
+        ? input.linked
+        : [];
+  const queries: IdentityToolQuery[] = [];
+  for (const label of names) {
+    const query =
+      beat === "close-subject"
+        ? `${label} ${input.subjectLabel}`
+        : `${label} empresas contratos familiares político`;
+    const key = queryKey(query, "tavily");
+    if (input.priorKeys.has(key)) continue;
+    if (queries.some((item) => queryKey(item.query, item.tool) === key)) continue;
+    queries.push({
+      query,
+      tool: "tavily",
+      purpose:
+        beat === "close-subject"
+          ? `Cruzar ${label} con ${input.subjectLabel}`
+          : `Segundo salto desde ${label}`,
+    });
+    if (queries.length >= MAX_PLAN_QUERIES) break;
+  }
+  return queries;
+}
+
 function readConnectionClaimConfidence(claim: RawConnectionClaim, sources: IdentitySourceRef[]): IdentityConfidence {
   const uniqueSources = new Set<string>();
   for (const source of sources) {
@@ -3213,6 +3253,7 @@ async function runConnectionRound(
     }
   }
 
+  const branches = connectionBranches(state.claims, subjectLabel);
   const planCall = await callOpenRouter(
     env,
     [
@@ -3235,35 +3276,45 @@ async function runConnectionRound(
     connectionModelCallOptions(env, CONNECTION_PLAN_MAX_TOKENS),
   );
 
+  let queries: IdentityToolQuery[] = [];
+  let planError: ReturnType<typeof fromGeneralError> | undefined;
   if (!planCall.ok) {
     logModelFailure(`conexiones plan ${round}`, planCall.attempts, planCall.error?.code);
-    return {
-      ...state,
-      canContinue: false,
-      stoppedReason: "El plan de conexiones no pudo consultar al modelo.",
-      error: fromGeneralError(
-        planCall.error,
-        "No se pudo planificar la vuelta de conexiones.",
-      ),
-    };
-  }
-
-  const planJson = await parseConnectionJson(env, planCall.text, CONNECTION_PLAN_MAX_TOKENS);
-  if (!planJson.ok) {
-    return {
-      ...state,
-      canContinue: false,
-      stoppedReason: "El plan de conexiones no llegó en JSON válido.",
-      error: fromGeneralError(
+    planError = fromGeneralError(
+      planCall.error,
+      "No se pudo planificar la vuelta de conexiones.",
+    );
+  } else {
+    const planJson = await parseConnectionJson(env, planCall.text, CONNECTION_PLAN_MAX_TOKENS);
+    if (!planJson.ok) {
+      planError = fromGeneralError(
         planJson.error,
         "El plan de conexiones no llegó en JSON válido.",
-      ),
-    };
+      );
+    } else {
+      queries = readConnectionQueries(planJson.value, priorKeys);
+    }
   }
 
-  const queries = readConnectionQueries(planJson.value, priorKeys);
+  if (queries.length === 0 && !hasJournalistBranch) {
+    queries = fallbackConnectionQueries({
+      round,
+      subjectLabel,
+      linked: branches.linked,
+      open: branches.open,
+      priorKeys,
+    });
+  }
+
   if (queries.length === 0) {
-    return { ...state, canContinue: false, stoppedReason: "sin búsquedas nuevas" };
+    return {
+      ...state,
+      canContinue: false,
+      stoppedReason: planError
+        ? planError.message
+        : "sin búsquedas nuevas",
+      ...(planError ? { error: planError } : {}),
+    };
   }
 
   const searches = await Promise.all(
@@ -3615,8 +3666,20 @@ export async function investigateIdentityConnections(
       }
     : undefined;
   const hasBranch = Boolean(branch?.entityId || branch?.claimId || branch?.label);
-  if (existing && !hasBranch && (!state.canContinue || state.rounds.length >= CONNECTION_ROUNDS)) {
+  if (existing && !hasBranch && state.rounds.length >= CONNECTION_ROUNDS) {
     return state;
+  }
+  if (existing && !hasBranch && !state.canContinue) {
+    const nextBeat = connectionRoundBeat(state.rounds.length + 1);
+    const sourced = state.claims.some((claim) => claim.id !== "root");
+    const open = connectionBranches(
+      state.claims,
+      state.claims.find((claim) => claim.id === "root")?.entities[0]?.label ?? name,
+    ).open.length;
+    const required =
+      (nextBeat === "expand-second" && sourced) ||
+      (nextBeat === "close-subject" && open > 0);
+    if (!required) return state;
   }
 
   const rootClaim = state.claims.find((claim) => claim.id === "root");

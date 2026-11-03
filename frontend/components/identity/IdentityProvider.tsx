@@ -197,33 +197,59 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
 
       try {
         for (let round = 0; round < MAX_CONNECTION_ROUNDS; round += 1) {
-          const response = await requestIdentityConnections({
-            name,
-            ...(details ? { details } : {}),
-            ...(interest ? { interest } : {}),
-            investigation,
-            candidateId,
-            ...(state ? { connection: state } : {}),
-          });
+          try {
+            const response = await requestIdentityConnections({
+              name,
+              ...(details ? { details } : {}),
+              ...(interest ? { interest } : {}),
+              investigation,
+              candidateId,
+              ...(state ? { connection: state } : {}),
+            });
 
-          if (runRef.current !== runId) return;
+            if (runRef.current !== runId) return;
 
-          state = {
-            claims: response.claims,
-            rounds: response.rounds,
-            summary: response.summary,
-            canContinue: response.canContinue,
-            stoppedReason: response.stoppedReason,
-          };
-          setConnection(state);
-          setConnectionError(response.error?.message ?? null);
-          setConnectionRetryable(response.error?.retryable === true);
+            state = {
+              claims: response.claims,
+              rounds: response.rounds,
+              summary: response.summary,
+              canContinue: response.canContinue,
+              stoppedReason: response.stoppedReason,
+            };
+            setConnection(state);
+            setConnectionError(response.error?.message ?? null);
+            setConnectionRetryable(response.error?.retryable === true);
 
-          if (
-            !response.canContinue ||
-            state.rounds.length >= MAX_CONNECTION_ROUNDS
-          ) {
-            break;
+            const sourced = state.claims.filter((claim) => claim.id !== "root").length;
+            const keepGoing =
+              state.rounds.length < MAX_CONNECTION_ROUNDS &&
+              (response.canContinue ||
+                (state.rounds.length === 1 && sourced > 0));
+            if (!keepGoing) break;
+          } catch (caught) {
+            if (runRef.current !== runId) return;
+            if (caught instanceof ConnectionApiError && caught.partial) {
+              state = {
+                claims: caught.partial.claims,
+                rounds: caught.partial.rounds,
+                summary: caught.partial.summary,
+                canContinue: caught.partial.canContinue,
+                stoppedReason: caught.partial.stoppedReason,
+              };
+              setConnection(state);
+              const sourced = state.claims.filter((claim) => claim.id !== "root")
+                .length;
+              if (
+                caught.retryable &&
+                state.rounds.length < MAX_CONNECTION_ROUNDS &&
+                (state.canContinue || (state.rounds.length === 1 && sourced > 0))
+              ) {
+                setConnectionError(caught.message);
+                setConnectionRetryable(true);
+                continue;
+              }
+            }
+            throw caught;
           }
         }
 
