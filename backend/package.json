@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "secrets": "node scripts/secret-bulk.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --import=./test/register.mjs --test test/sourceScore.test.ts test/identity.test.ts test/generalFuncs.test.ts test/db.test.ts test/occupationImage.test.ts",
     "build": "wrangler deploy --dry-run --outdir dist"

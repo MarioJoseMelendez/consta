@@ -62,7 +62,7 @@ export function shortChannelName(id: string, fallback?: string): string {
 }
 
 export function formatDate(value?: string): string {
-  if (!value) return "—";
+  if (!value) return "n/a";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
 
@@ -119,7 +119,7 @@ export function formatAttributeValue(
   key: string,
   value: string | number | boolean | null,
 ): string {
-  if (value === null) return "—";
+  if (value === null) return "n/a";
   if (typeof value === "boolean") return value ? "Sí" : "No";
   if (typeof value === "number") {
     if (/monto|amount|budget|valor/i.test(key)) return formatCurrency(value);

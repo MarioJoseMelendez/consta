@@ -110,6 +110,7 @@ const LOCAL_ORIGINS = new Set([
   "http://localhost:3001",
   "http://127.0.0.1:3001",
 ]);
+const PRODUCTION_ORIGIN = "https://consta.kahuna.li";
 const PAGES_ORIGIN = /^https:\/\/(?:[a-z0-9-]+\.)*pages\.dev$/i;
 const MAX_QUERY_LENGTH = 200;
 const MAX_ID_LENGTH = 200;
@@ -224,14 +225,31 @@ function parseExtraOrigins(raw: string | undefined): string[] {
 
 function isAllowedOrigin(origin: string, extraOrigins: string[]): boolean {
   return (
+    origin === PRODUCTION_ORIGIN ||
     LOCAL_ORIGINS.has(origin) ||
     PAGES_ORIGIN.test(origin) ||
     extraOrigins.includes(origin)
   );
 }
 
+function stripApiPrefix(pathname: string): string {
+  if (pathname === "/api" || pathname.startsWith("/api/")) {
+    return pathname.slice(4) || "/";
+  }
+  return pathname;
+}
+
+function rewriteApiRequest(request: Request): Request {
+  const url = new URL(request.url);
+  const nextPath = stripApiPrefix(url.pathname);
+  if (nextPath === url.pathname) return request;
+  url.pathname = nextPath;
+  return new Request(url.toString(), request);
+}
+
 function isIdentityPath(pathname: string): boolean {
-  return pathname === "/identity" || pathname.startsWith("/identity/");
+  const path = stripApiPrefix(pathname);
+  return path === "/identity" || path.startsWith("/identity/");
 }
 
 // Las rutas demo se marcan como ficticias. /identity/* consulta fuentes públicas.
@@ -246,11 +264,13 @@ app.use(
   "*",
   cors({
     origin: (origin, c) => {
+      if (!origin) return undefined;
       const extraOrigins = parseExtraOrigins((c.env as Bindings).CORS_ORIGINS);
       return isAllowedOrigin(origin, extraOrigins) ? origin : undefined;
     },
     allowMethods: ["GET", "POST", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization"],
+    credentials: false,
     exposeHeaders: [
       "X-Consta-Demo",
       "X-Consta-Channel",
@@ -527,7 +547,7 @@ app.post("/analyze", async (c) => {
 
   if (!targetId) {
     return c.json(
-      apiError("entity_not_found", "No se encontró una entidad para la consulta."),
+      apiError("entity_not_found", "No entity was found for that query."),
       404,
     );
   }
@@ -1021,7 +1041,7 @@ app.notFound((c) =>
   c.json(
     apiError(
       "not_found",
-      `Ruta no encontrada: ${c.req.method} ${new URL(c.req.url).pathname}.`
+      `Route not found: ${c.req.method} ${new URL(c.req.url).pathname}.`
     ),
     404,
   ),
@@ -1032,4 +1052,8 @@ app.onError((error, c) => {
   return c.json(apiError("internal_error", "Error interno del servicio.", true), 500);
 });
 
-export default app;
+export default {
+  fetch(request: Request, env: Bindings, ctx: ExecutionContext) {
+    return app.fetch(rewriteApiRequest(request), env, ctx);
+  },
+};

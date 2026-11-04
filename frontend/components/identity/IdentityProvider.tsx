@@ -44,6 +44,7 @@ interface IdentityContextValue {
   branchLabel: string | null;
   notice: string | null;
   investigate: (name: string, details: string, interest?: string) => Promise<void>;
+  startOver: () => void;
   searchMore: () => Promise<void>;
   selectCandidate: (id: string) => void;
   confirmCandidate: (id: string) => void;
@@ -126,6 +127,24 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
     [],
   );
 
+  const startOver = useCallback(() => {
+    runRef.current += 1;
+    setPhase("idle");
+    setResult(null);
+    setError(null);
+    setNotice(null);
+    setExpandedId(null);
+    setConfirmedId(null);
+    setConnection(null);
+    setConnectionPhase("idle");
+    setConnectionError(null);
+    setConnectionRetryable(false);
+    setBranchLabel(null);
+    setConsultedName("");
+    setConsultedDetails("");
+    setConsultedInterest("");
+  }, []);
+
   const resetConnections = useCallback(() => {
     runRef.current += 1;
     setExpandedId(null);
@@ -147,6 +166,7 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
       setConsultedName(name.trim());
       setConsultedDetails(details.trim());
       setConsultedInterest(interest.trim());
+      const runId = runRef.current;
 
       try {
         const response = await investigateIdentity({
@@ -154,10 +174,12 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
           ...(details.trim() ? { details } : {}),
           ...(interest.trim() ? { interest } : {}),
         });
+        if (runRef.current !== runId) return;
         setResult(response);
         setError(response.error?.message ?? null);
         setPhase("ready");
       } catch (caught) {
+        if (runRef.current !== runId) return;
         if (caught instanceof IdentityApiError && caught.partial) {
           setResult({
             ...caught.partial,
@@ -481,6 +503,7 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
       branchLabel,
       notice,
       investigate,
+      startOver,
       searchMore,
       selectCandidate,
       confirmCandidate,
@@ -500,6 +523,7 @@ export default function IdentityProvider({ children }: { children: ReactNode }) 
       branchLabel,
       notice,
       investigate,
+      startOver,
       searchMore,
       selectCandidate,
       confirmCandidate,

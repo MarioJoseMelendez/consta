@@ -109,26 +109,52 @@ const IDENTITY_MODELS = [
 const FIELD_KEYS = new Set<string>(IDENTITY_FIELD_KEYS);
 
 /** Herramientas que el modelo puede elegir. `bd` es la base compartida. */
+const ENGLISH_OUTPUT = [
+  "LANGUAGE: every string a person will read is English.",
+  "That includes interpretation, purpose, reason, description, note, occupation, claim text, findings, and any role or place description.",
+  "Proper names, ID numbers, and URLs stay as published.",
+  "A search query may use the language of the records. Everything else is English.",
+  'Example: write "Senator from Washington", never "Senadora de Washington".',
+].join(" ");
+
 const IDENTITY_TOOLS_JSON =
-  '{"tools":[{"wikidata":"Es una wiki para data específica. Sirve para saber si el nombre es una persona o una empresa."},{"tavily":"Para buscar en la web, en registros públicos y en noticieros."},{"bd":"Base de investigaciones previas de Consta. Devuelve afirmaciones ya guardadas, con su nivel de corroborancia, su puntaje y sus fuentes originales. Úsala para reutilizar trabajo ya verificado, no para inventar datos."}]}';
+  '{"tools":[{"wikidata":"A structured wiki. Use it to tell whether the name is a person or a company."},{"tavily":"Web search across public records and news."},{"bd":"Consta store of earlier investigations. Returns saved claims with their corroboration, score, and original sources. Reuse verified work. Do not invent data."}]}';
 
 /** Qué hay que buscar en cada campo. Una línea, en el orden del contrato. */
 const FIELD_LOOK_FOR: Record<IdentityFieldKey, string> = {
-  type: "Si es persona, empresa o institución.",
-  name: "El nombre con el que la fuente identifica a la entidad.",
-  socialName: "La razón social o el nombre legal registrado.",
-  nationalID: "El CUI o DPI, solo si es una persona.",
-  taxesID: "El NIT, número de identificación tributaria.",
-  aliases: "Otros nombres, siglas o alias.",
-  dateOfBirth: "La fecha de nacimiento, si es una persona.",
-  nationality: "La nacionalidad o el país.",
-  address: "La dirección física o la sede.",
-  legalRepresentative: "El nombre del representante legal.",
-  incorporationDate: "La fecha de constitución o fundación.",
-  website: "El sitio web oficial.",
-  email: "El correo electrónico.",
-  phone: "El teléfono.",
-  occupation: "La ocupación o el cargo principal. Si la fuente nombra varios, elige uno solo.",
+  type: "Whether this is a person, a company, or an institution.",
+  name: "The name the source uses for the entity.",
+  socialName: "The registered legal name.",
+  nationalID: "The national ID (CUI or DPI), only for a person.",
+  taxesID: "The tax ID (NIT).",
+  aliases: "Other names, initials, or aliases.",
+  dateOfBirth: "Date of birth, if this is a person.",
+  nationality: "Nationality or country.",
+  address: "A physical address or headquarters.",
+  legalRepresentative: "The legal representative's name.",
+  incorporationDate: "The incorporation or founding date.",
+  website: "The official website.",
+  email: "The email address.",
+  phone: "The phone number.",
+  occupation: "The main occupation or role. If the source names several, pick one. Write it in English.",
+};
+
+const ENGLISH_FIELD_LABEL: Record<IdentityFieldKey, string> = {
+  type: "Type",
+  name: "Name",
+  socialName: "Legal name",
+  nationalID: "National ID",
+  taxesID: "Tax ID",
+  aliases: "Aliases",
+  dateOfBirth: "Date of birth",
+  nationality: "Nationality",
+  address: "Address",
+  legalRepresentative: "Legal representative",
+  incorporationDate: "Incorporation date",
+  website: "Website",
+  email: "Email",
+  phone: "Phone",
+  occupation: "Occupation",
 };
 
 /** Término corto para una búsqueda web de ese campo. */
@@ -147,7 +173,7 @@ const FIELD_SEARCH_TERM: Record<IdentityFieldKey, string> = {
   website: "sitio web",
   email: "correo",
   phone: "teléfono",
-  occupation: "ocupación",
+  occupation: "occupation",
 };
 
 /** Cómo reconocer que un purpose o una consulta ya nombra el campo. */
@@ -220,7 +246,7 @@ const ENTERPRISE_FIELDS: readonly IdentityFieldKey[] = [
 const IDENTITY_FIELDS_JSON = JSON.stringify({
   fields: IDENTITY_FIELD_DEFINITIONS.map((definition) => ({
     key: definition.key,
-    label: definition.label,
+    label: ENGLISH_FIELD_LABEL[definition.key],
     lookFor: FIELD_LOOK_FOR[definition.key],
   })),
 });
@@ -241,9 +267,10 @@ const PLAN_SYSTEM = [
   'La siguiente consulta es exactamente el nombre consultado, sin palabras de más, tool "wikidata", purpose "type / Tipo". Sirve para saber si es persona o empresa.',
   'La última es el mismo nombre, tool "tavily", purpose "type / Tipo", para ver si es una figura pública en noticieros.',
   "No busques NIT, razón social, DPI ni cargo hasta saber el tipo. En el plan solo van esas consultas y, si aplica, la de bd.",
-  "Escribe interpretation, query y purpose en español.",
+  "Write interpretation and purpose in English. A query may use the language of the records.",
   'Forma: {"interpretation":"INTERPRETACION","queries":[{"query":"CONSULTA","purpose":"CLAVE / ETIQUETA","tool":"wikidata"}]}',
   'Reemplaza INTERPRETACION, CONSULTA, CLAVE y ETIQUETA. purpose lleva la clave real del diccionario. tool es "wikidata", "tavily" o "bd". No dejes los marcadores literales ni uses puntos suspensivos.',
+  ENGLISH_OUTPUT,
 ].join("\n");
 
 const ROUND_SYSTEM = [
@@ -276,9 +303,10 @@ const ROUND_SYSTEM = [
   "En la ronda 3, action es \"stop\" y nextQueries es [].",
   "Si quedan campos en not_found, quedan rondas y hay una búsqueda pública concreta para esos campos, action es \"continue\" y nextQueries trae de 1 a 5 búsquedas nuevas.",
   "Si no hay más pistas públicas para los campos que faltan, action es \"stop\". No inventes valores para llenar el perfil.",
-  "Cada campo puede incluir note: una frase corta en español, solo cuando el valor no es lo que el campo parece. Por ejemplo, una dirección de la oficina en el Congreso y no del domicilio del diputado. Si no hace falta aclarar, omite note. La nota tiene que salir del resultado.",
+  "A field may include note: one short English sentence, only when the value is not what the field looks like. For example, a congressional office address rather than the member's home. If no clarification is needed, omit note. The note must come from the result.",
   'Forma: {"candidates":[{"id":"c1","label":"ETIQUETA","description":"DESCRIPCION","fields":[{"key":"name","value":"VALOR","status":"found","sources":[{"source":"wikidata","title":"TITULO","url":"https://ejemplo.invalid/fuente"}]}]}],"decision":{"action":"stop","reason":"MOTIVO","nextQueries":[]}}',
   "Reemplaza ETIQUETA, DESCRIPCION, VALOR, TITULO, MOTIVO, CLAVE y la URL de ejemplo por datos de los resultados. No uses puntos suspensivos.",
+  ENGLISH_OUTPUT,
 ].join("\n");
 
 const REPAIR_SYSTEM = [
@@ -518,7 +546,7 @@ async function parseModelJson(
       ok: false,
       error: repair.error ?? {
         code: "invalid_model_json",
-        message: "No se pudo reparar el JSON del modelo.",
+        message: "The model JSON could not be repaired.",
       },
     };
   }
@@ -529,7 +557,7 @@ async function parseModelJson(
       ok: false,
       error: {
         code: "invalid_model_json",
-        message: "El modelo no devolvió un objeto JSON utilizable.",
+        message: "The model did not return a usable JSON object.",
       },
     };
   }
@@ -558,7 +586,7 @@ async function parseConnectionJson(
       ok: false,
       error: repair.error ?? {
         code: "invalid_model_json",
-        message: "No se pudo reparar el JSON del modelo.",
+        message: "The model JSON could not be repaired.",
       },
     };
   }
@@ -568,7 +596,7 @@ async function parseConnectionJson(
       ok: false,
       error: {
         code: "invalid_model_json",
-        message: "El modelo no devolvió un objeto JSON utilizable.",
+        message: "The model did not return a usable JSON object.",
       },
     };
   }
@@ -946,7 +974,7 @@ async function searchIdentityQuery(
             {
               source: "bd",
               code: "db_unavailable",
-              message: "La base de investigaciones no está disponible.",
+              message: "The investigation store is not available.",
             },
           ],
     };
@@ -1048,7 +1076,7 @@ function formatMissing(keys: readonly IdentityFieldKey[]): string {
 }
 
 function fieldPurpose(key: IdentityFieldKey): string {
-  return `Busca ${key} / ${identityFieldLabel(key)}.`;
+  return `${key} / ${ENGLISH_FIELD_LABEL[key]}.`;
 }
 
 type SubjectKind = "person" | "enterprise" | "unknown";
@@ -1086,12 +1114,12 @@ function followUpQueries(
   prior: Set<string>,
 ): IdentityToolQuery[] {
   if (kind === "unknown") {
-    const query = clip(`${name} persona o empresa`, 300);
+    const query = clip(`${name} person or company`, 300);
     if (!query) return [];
     const directed: IdentityToolQuery = {
       query,
       tool: "tavily",
-      purpose: "type / Tipo. Distingue si es persona o empresa.",
+      purpose: "type / Type. Person or company.",
     };
     return prior.has(queryKey(directed.query, directed.tool)) ? [] : [directed];
   }
@@ -1101,15 +1129,15 @@ function followUpQueries(
   for (const key of order) {
     if (!missing.includes(key)) continue;
     const news = kind === "person" && NEWS_PERSON_FIELDS.has(key);
-    const term = news && key === "occupation" ? "cargo" : FIELD_SEARCH_TERM[key];
+    const term = news && key === "occupation" ? "occupation" : FIELD_SEARCH_TERM[key];
     const query = clip(`${name} ${term}`, 300);
     if (!query) continue;
     const directed: IdentityToolQuery = {
       query,
       tool: "tavily",
       purpose: news
-        ? `${fieldPurpose(key)} Noticieros.`
-        : `${fieldPurpose(key)} Registro público.`,
+        ? `${fieldPurpose(key)} News.`
+        : `${fieldPurpose(key)} Public record.`,
     };
     if (prior.has(queryKey(directed.query, directed.tool))) continue;
     queries.push(directed);
@@ -1120,12 +1148,12 @@ function followUpQueries(
 
 function kindReason(kind: SubjectKind): string {
   if (kind === "person") {
-    return "Es una persona. Lo que falta se busca en noticieros y en registros públicos.";
+    return "This is a person. What is still missing is searched in news and public records.";
   }
   if (kind === "enterprise") {
-    return "Es una empresa. Lo que falta se busca en registros públicos.";
+    return "This is a company. What is still missing is searched in public records.";
   }
-  return "Todavía no está claro si es persona o empresa.";
+  return "It is not clear yet whether this is a person or a company.";
 }
 
 function finishRound(
@@ -1157,12 +1185,12 @@ function aimPlan(plan: IdentityPlan, name: string): IdentityPlan {
       {
         query: consulted,
         tool: "wikidata",
-        purpose: "type / Tipo. Determina si es persona o empresa.",
+        purpose: "type / Type. Person or company.",
       },
       {
         query: consulted,
         tool: "tavily",
-        purpose: "type / Tipo. Figura pública en noticieros.",
+        purpose: "type / Type. Public figure in the news.",
       },
     ],
   };
@@ -1244,6 +1272,7 @@ function roundPrompt(input: {
   }
 
   lines.push("", "Devuelve solo el JSON con candidates y decision.");
+  lines.push(ENGLISH_OUTPUT);
   return lines.join("\n");
 }
 
@@ -1793,14 +1822,14 @@ async function runInvestigation(
   if (!planCall.ok) {
     logModelFailure("plan", planCall.attempts, planCall.error?.code);
     return emptyResult(
-      fromGeneralError(planCall.error, "No se pudo generar el plan de búsqueda."),
+      fromGeneralError(planCall.error, "The search plan could not be created."),
     );
   }
 
   const planJson = await parseModelJson(env, planCall.text, PLAN_MAX_TOKENS);
   if (!planJson.ok) {
     return emptyResult(
-      fromGeneralError(planJson.error, "El plan de búsqueda no llegó en JSON válido."),
+      fromGeneralError(planJson.error, "The search plan did not arrive as valid JSON."),
     );
   }
 
@@ -1809,7 +1838,7 @@ async function runInvestigation(
   if (!plan) {
     return emptyResult({
       code: "invalid_plan",
-      message: "El plan de búsqueda no incluyó consultas utilizables.",
+      message: "The search plan did not include usable queries.",
     });
   }
 
@@ -1895,7 +1924,7 @@ async function runInvestigation(
         candidates,
         error: fromGeneralError(
           roundCall.error,
-          "No se pudieron actualizar los candidatos.",
+          "The candidates could not be updated.",
         ),
       };
     }
@@ -2059,7 +2088,7 @@ function extraQueries(
     queries.push({
       query,
       tool: "tavily",
-      purpose: `${fieldPurpose(key)} Registro público. La dirección puede ser una oficina.`,
+      purpose: `${fieldPurpose(key)} Public record. The address may be an office.`,
     });
   }
   return queries;
@@ -2123,6 +2152,7 @@ function extraPrompt(input: {
     }
   }
   lines.push("", "Devuelve solo el JSON con candidates y decision.");
+  lines.push(ENGLISH_OUTPUT);
   return lines.join("\n");
 }
 
@@ -2134,6 +2164,7 @@ const EXTRA_SYSTEM = [
   "address puede ser la oficina, no solo el domicilio. Si es una oficina, note lo dice en una frase.",
   "Cada valor found necesita sources cuya url sea una de las URLs entregadas.",
   'decision es {"action":"stop","reason":"MOTIVO","nextQueries":[]}.',
+  ENGLISH_OUTPUT,
 ].join("\n");
 
 export async function requestExtraIdentitySearch(
@@ -2154,7 +2185,7 @@ export async function requestExtraIdentitySearch(
       ...current,
       error: {
         code: "extra_limit",
-        message: "Solo se pueden pedir dos búsquedas extra.",
+        message: "Only two extra searches can be requested.",
       },
     };
   }
@@ -2244,7 +2275,7 @@ export async function investigateIdentity(
     );
     return emptyResult({
       code: "internal_error",
-      message: "La investigación de identidad no pudo completarse.",
+      message: "The identity investigation could not finish.",
       retryable: true,
     });
   }
@@ -2255,9 +2286,9 @@ function emptyConnectionState(): IdentityConnectionState {
     claims: [],
     rounds: [],
     summary: {
-      who: "Sin contexto.",
-      findings: "Todavía no hay afirmaciones probables.",
-      text: "Sin contexto. Todavía no hay afirmaciones probables.",
+      who: "No context yet.",
+      findings: "No probable claims yet.",
+      text: "No context yet. No probable claims yet.",
       claims: 0,
     },
     canContinue: false,
@@ -2271,10 +2302,10 @@ function connectionWho(candidate: IdentityCandidate, name: string): string {
   const nationality = candidate.fields.find((field) => field.key === "nationality");
   const address = candidate.fields.find((field) => field.key === "address");
 
-  const typeText = type?.value === "person" ? "persona" : type?.value === "enterprise" ? "empresa" : "sin tipo";
-  const occupationText = occupation?.value || "sin ocupación";
-  const nationalityText = nationality?.value || "sin nacionalidad";
-  const addressText = address?.value || "sin dirección";
+  const typeText = type?.value === "person" ? "person" : type?.value === "enterprise" ? "company" : "type unknown";
+  const occupationText = occupation?.value || "occupation unknown";
+  const nationalityText = nationality?.value || "nationality unknown";
+  const addressText = address?.value || "address unknown";
 
   return `${typeText}, ${occupationText}, ${nationalityText}, ${addressText}`.trim();
 }
@@ -2290,7 +2321,7 @@ function buildRootClaim(name: string, candidate: IdentityCandidate): IdentityCla
   const sources = candidate.fields.flatMap((field) => field.sources).slice(0, 5);
   return {
     id: "root",
-    text: `El sujeto investigado es ${label}.`,
+    text: `The subject under investigation is ${label}.`,
     parentId: null,
     parentText: "",
     sources,
@@ -2407,7 +2438,7 @@ function fallbackConnectionSummary(
 ): IdentitySummary {
   const sourced = claims.filter((claim) => claim.id !== "root");
   const lines = sourced.slice(0, 6).map((claim) => claim.text);
-  const findings = lines.join(" ") || "Todavía no hay afirmaciones probables.";
+  const findings = lines.join(" ") || "No probable claims yet.";
   return {
     who,
     findings,
@@ -2907,13 +2938,14 @@ function buildConnectionSummaryPrompt(input: {
     `Nombre consultado: ${input.name}`,
     journalistDetailNote(input.details),
     journalistInterestNote(input.interest),
-    `Contexto del sujeto: ${input.who || "Sin contexto."}`,
+    `Contexto del sujeto: ${input.who || "No context yet."}`,
     "Afirmaciones acumuladas:",
   ];
   const accumulated = input.claims.filter((claim) => claim.id !== "root");
   if (accumulated.length === 0) lines.push("Ninguna todavía.");
   for (const claim of accumulated) lines.push(`- [${claim.id}] ${claim.text}`);
   lines.push("", "Devuelve solo el JSON con findings.");
+  lines.push(ENGLISH_OUTPUT);
   return lines.join("\n");
 }
 
@@ -2929,9 +2961,9 @@ function buildConnectionSummary(input: {
 
   const findings = probableClaims.length > 0
     ? probableClaims
-        .map((claim) => `Se encontró que ${claim.text}.`)
+        .map((claim) => `Found that ${claim.text}.`)
         .join("\n")
-    : "Todavía no hay afirmaciones probables.";
+    : "No probable claims yet.";
 
   return {
     who: input.who,
@@ -2960,7 +2992,7 @@ function buildConnectionQueriesPrompt(input: {
     `Nombre consultado: ${input.name}`,
     journalistDetailNote(input.details),
     journalistInterestNote(input.interest),
-    `Contexto del sujeto: ${input.who || "Sin contexto."}`,
+    `Contexto del sujeto: ${input.who || "No context yet."}`,
     `Afirmación raíz: ${input.rootText}`,
     "Afirmaciones acumuladas:",
   ];
@@ -3029,6 +3061,7 @@ function buildConnectionQueriesPrompt(input: {
       ? "Propón de 3 a 5 búsquedas nuevas sobre la rama elegida."
       : "Propón de 3 a 5 búsquedas nuevas que sigan el tiempo de esta ronda.",
     "Devuelve solo el JSON con queries.",
+    ENGLISH_OUTPUT,
   );
   return lines.join("\n");
 }
@@ -3051,11 +3084,12 @@ function buildConnectionEntitiesPrompt(input: {
     "",
     "Devuelve las personas y las organizaciones que aparecen nombradas en estos resultados y que no son el sujeto.",
     "Formato exacto:",
-    '{"entities":[{"id":"e1","label":"Nombre completo","type":"person","description":"Quién es en una frase","occupation":"Cargo u ocupación o null","indexes":[1,3]}]}',
+    '{"entities":[{"id":"e1","label":"Full name","type":"person","description":"Who they are, in one English sentence","occupation":"One English role, or null","indexes":[1,3]}]}',
     'type solo puede ser "person" o "enterprise".',
-    "occupation es un solo cargo u ocupación principal que la fuente nombre; si nombra varios, elige uno. Si no aparece, null. No lo inventes.",
+    "occupation is the single main role the source names, written in English. If it names several, pick one. If none appears, null. Do not invent it.",
     "indexes son los números de las fuentes de esta vuelta donde aparece la entidad. Usa [] si no la encuentras en ninguna.",
     'Si no hay entidades distintas al sujeto, devuelve {"entities":[]}.',
+    ENGLISH_OUTPUT,
   );
   return lines.join("\n");
 }
@@ -3080,7 +3114,7 @@ function buildConnectionClaimsPrompt(input: {
     `Nombre consultado: ${input.name}`,
     journalistDetailNote(input.details),
     journalistInterestNote(input.interest),
-    `Contexto del sujeto: ${input.who || "Sin contexto."}`,
+    `Contexto del sujeto: ${input.who || "No context yet."}`,
     `Afirmación raíz: ${input.rootText}`,
     "Afirmaciones acumuladas:",
   ];
@@ -3135,6 +3169,7 @@ function buildConnectionClaimsPrompt(input: {
     if (item.snippet) lines.push(`   snippet: ${item.snippet.slice(0, 280)}`);
   });
   lines.push("", "Devuelve solo el JSON con claims.");
+  lines.push(ENGLISH_OUTPUT);
   return lines.join("\n");
 }
 
@@ -3156,6 +3191,7 @@ const CONNECTION_PLAN_SYSTEM = [
   "Si falta tool, la consulta se busca en wikidata y en tavily. Si tool no es válido, también.",
   "Si no hay afirmaciones nuevas, action es \"stop\" y nextQueries es [].",
   "Devuelve solo el JSON con queries.",
+  ENGLISH_OUTPUT,
 ].join("\n");
 
 const CONNECTION_ENTITY_SYSTEM = [
@@ -3168,6 +3204,8 @@ const CONNECTION_ENTITY_SYSTEM = [
   "El interés de investigación solo orientó las búsquedas. Incluye toda entidad que las fuentes nombren, aunque no coincida con ese interés.",
   "Cada entidad lleva id, label, type, description, occupation e indexes. type es person o enterprise; occupation es un solo cargo principal que la fuente nombre o null; indexes cita los números de las fuentes.",
   'Devuelve solo el JSON con entities: {"entities":[...]}. Si no hay entidades distintas al sujeto, entities es [].',
+  "Write label as the published name. Write description and occupation in English.",
+  ENGLISH_OUTPUT,
 ].join("\n");
 
 const CONNECTION_CLAIM_SYSTEM = [
@@ -3185,6 +3223,8 @@ const CONNECTION_CLAIM_SYSTEM = [
   "El interés de investigación solo orientó las búsquedas. Incluye toda afirmación que las fuentes respalden, aunque no coincida con ese interés. El interés no filtra claims ni entidades.",
   "Si no hay fuentes, claims es [].",
   "Devuelve solo el JSON con claims.",
+  "Write every claim text in English.",
+  ENGLISH_OUTPUT,
 ].join("\n");
 
 const CONNECTION_SUMMARY_SYSTEM = [
@@ -3193,6 +3233,8 @@ const CONNECTION_SUMMARY_SYSTEM = [
   "El nombre, la descripción y el interés de investigación son la consulta del periodista, no evidencia.",
   "Distingue las conexiones directas con el sujeto de las cadenas entre identidades. Si una cadena no cierra en el sujeto, dilo sin presentarla como conexión del sujeto.",
   "Devuelve solo el JSON con findings: una lista de frases en texto plano, no de objetos.",
+  "Write every finding in English.",
+  ENGLISH_OUTPUT,
 ].join("\n");
 
 const CONNECTION_PLAN_MAX_TOKENS = 4_500;
@@ -3221,7 +3263,7 @@ async function runConnectionRound(
   const round = state.rounds.length + 1;
   const rootText =
     state.claims.find((claim) => claim.id === "root")?.text ??
-    `El sujeto investigado es ${candidateLabel(candidate, name)}.`;
+    `The subject under investigation is ${candidateLabel(candidate, name)}.`;
   const subjectLabel =
     state.claims.find((claim) => claim.id === "root")?.entities[0]?.label ?? name;
   const hasJournalistBranch = Boolean(
@@ -3282,14 +3324,14 @@ async function runConnectionRound(
     logModelFailure(`conexiones plan ${round}`, planCall.attempts, planCall.error?.code);
     planError = fromGeneralError(
       planCall.error,
-      "No se pudo planificar la vuelta de conexiones.",
+      "The connection round could not be planned.",
     );
   } else {
     const planJson = await parseConnectionJson(env, planCall.text, CONNECTION_PLAN_MAX_TOKENS);
     if (!planJson.ok) {
       planError = fromGeneralError(
         planJson.error,
-        "El plan de conexiones no llegó en JSON válido.",
+        "The connection plan did not arrive as valid JSON.",
       );
     } else {
       queries = readConnectionQueries(planJson.value, priorKeys);
@@ -3421,12 +3463,12 @@ async function runConnectionRound(
           searches,
           entities: [],
           claims: [],
-          reason: "No se identificaron entidades nuevas.",
+          reason: "No new entities identified.",
           stopped: true,
         },
       ],
       canContinue: false,
-      stoppedReason: "No se identificaron entidades nuevas.",
+      stoppedReason: "No new entities identified.",
     };
   }
 
@@ -3514,12 +3556,12 @@ async function runConnectionRound(
           searches,
           entities,
           claims: [],
-          reason: "No se encontraron afirmaciones nuevas.",
+          reason: "No new claims found.",
           stopped: true,
         },
       ],
       canContinue: false,
-      stoppedReason: "No se encontraron afirmaciones nuevas.",
+      stoppedReason: "No new claims found.",
     };
   }
 
@@ -3608,10 +3650,10 @@ export async function investigateIdentityConnections(
   if (!candidate) {
     return {
       ...emptyConnectionState(),
-      stoppedReason: "No se encontró el candidato en la investigación.",
+      stoppedReason: "That candidate is not in this investigation.",
       error: {
         code: "candidate_not_found",
-        message: `No existe el candidato "${request.candidateId}" en la investigación.`,
+        message: `Candidate "${request.candidateId}" is not in this investigation.`,
       },
     };
   }
@@ -3633,8 +3675,8 @@ export async function investigateIdentityConnections(
       rounds,
       summary: resolveConnectionSummary(existing.summary, {
         who,
-        findings: "Todavía no hay afirmaciones probables.",
-        text: `${who} Todavía no hay afirmaciones probables.`,
+        findings: "No probable claims yet.",
+        text: `${who} No probable claims yet.`,
         claims: 0,
       }),
       canContinue:
@@ -3646,7 +3688,7 @@ export async function investigateIdentityConnections(
     const root = buildRootClaim(name, candidate);
     const subject = buildSubjectEntity(name, candidate, root);
     root.entities = [subject];
-    const findings = "Todavía no hay afirmaciones probables.";
+    const findings = "No probable claims yet.";
     state = {
       claims: [root],
       rounds: [],
@@ -3709,7 +3751,7 @@ export async function investigateIdentityConnections(
       stoppedReason: "La vuelta de conexiones no pudo completarse.",
       error: {
         code: "internal_error",
-        message: "La vuelta de conexiones no pudo completarse.",
+        message: "The connection round could not finish.",
         retryable: true,
       },
     };

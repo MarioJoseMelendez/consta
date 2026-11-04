@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useState, type FormEvent } from "react";
 
 import { IconArrowRight, IconSearch } from "@/components/Icons";
 
@@ -15,6 +15,14 @@ export default function IdentityForm() {
   const [details, setDetails] = useState("");
   const [interest, setInterest] = useState("");
   const loading = phase === "loading";
+  const investigating = phase !== "idle";
+
+  useEffect(() => {
+    if (phase !== "idle") return;
+    setName("");
+    setDetails("");
+    setInterest("");
+  }, [phase]);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -22,6 +30,8 @@ export default function IdentityForm() {
     if (!nextName || loading) return;
     void investigate(nextName, details, interest);
   }
+
+  if (investigating) return null;
 
   return (
     <form className="identity-form" onSubmit={handleSubmit}>
@@ -55,7 +65,7 @@ export default function IdentityForm() {
           value={details}
           maxLength={2000}
           rows={3}
-          placeholder="Place, period, office, or other public context. This is not a source."
+          placeholder="Place, period, office, public context. Context only, not a source."
           disabled={loading}
           onChange={(event) => setDetails(event.target.value)}
         />
@@ -71,7 +81,7 @@ export default function IdentityForm() {
           value={interest}
           maxLength={1000}
           rows={3}
-          placeholder="What to look for: contracts, parties, associated companies, outside support. Leave empty to follow public-interest ties."
+          placeholder="Contracts, parties, linked companies, outside support. Blank follows public-interest ties."
           disabled={loading}
           onChange={(event) => setInterest(event.target.value)}
         />

@@ -264,7 +264,7 @@ async function postIdentity(
     if (!response.ok) {
       throw new IdentityApiError(
         failure?.message ??
-          `La investigación no pudo completarse (${response.status}).`,
+          `The investigation could not finish (${response.status}).`,
         failure?.code ?? "request_failed",
         response.status,
         failure?.retryable ?? false,
@@ -274,7 +274,7 @@ async function postIdentity(
 
     if (!investigation) {
       throw new IdentityApiError(
-        "La respuesta de identidad no tiene el formato esperado.",
+        "The identity response was not in the expected format.",
         "invalid_response",
         response.status,
         false,
@@ -287,7 +287,7 @@ async function postIdentity(
     if (error instanceof IdentityApiError) throw error;
     if (error instanceof DOMException && error.name === "AbortError") {
       throw new IdentityApiError(
-        "La investigación superó los 300 segundos.",
+        "The investigation took longer than 300 seconds.",
         "timeout",
         0,
         true,
@@ -295,7 +295,7 @@ async function postIdentity(
       );
     }
     throw new IdentityApiError(
-      "No se pudo contactar el servicio de identidad.",
+      "Could not reach the identity service.",
       "network_error",
       0,
       true,
@@ -376,7 +376,7 @@ export async function requestIdentityConnections(
     if (!response.ok) {
       throw new ConnectionApiError(
         failure?.message ??
-          `Las conexiones no pudieron completarse (${response.status}).`,
+          `Connections could not finish (${response.status}).`,
         failure?.code ?? "request_failed",
         response.status,
         failure?.retryable ?? false,
@@ -386,7 +386,7 @@ export async function requestIdentityConnections(
 
     if (!state) {
       throw new ConnectionApiError(
-        "La respuesta de conexiones no tiene el formato esperado.",
+        "The connections response was not in the expected format.",
         "invalid_response",
         response.status,
         false,
@@ -410,7 +410,7 @@ export async function requestIdentityConnections(
     if (error instanceof ConnectionApiError) throw error;
     if (error instanceof DOMException && error.name === "AbortError") {
       throw new ConnectionApiError(
-        "Las conexiones superaron los 300 segundos.",
+        "Connections took longer than 300 seconds.",
         "timeout",
         0,
         true,
@@ -418,7 +418,7 @@ export async function requestIdentityConnections(
       );
     }
     throw new ConnectionApiError(
-      "No se pudo contactar el servicio de conexiones.",
+      "Could not reach the connections service.",
       "network_error",
       0,
       true,
@@ -469,7 +469,7 @@ export async function saveIdentityAnalysis(
       const failure = readError(payload);
       throw new Error(
         failure?.message ??
-          `La investigación no se pudo guardar (${response.status}).`,
+          `The investigation could not be saved (${response.status}).`,
       );
     }
   } finally {

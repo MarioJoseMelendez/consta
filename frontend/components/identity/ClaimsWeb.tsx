@@ -741,7 +741,7 @@ function AffirmationTable({
                   <td className="claim-row-text">{row.claim.text}</td>
                 ) : null}
                 <td>{row.from}</td>
-                <td className="claim-row-relation">{row.relation || "—"}</td>
+                <td className="claim-row-relation">{row.relation || "n/a"}</td>
                 <td>
                   {row.entity && onOpenEntity ? (
                     <button
@@ -752,7 +752,7 @@ function AffirmationTable({
                       {row.to}
                     </button>
                   ) : (
-                    row.to || "—"
+                    row.to || "n/a"
                   )}
                 </td>
                 <td>
@@ -787,7 +787,7 @@ function AffirmationTable({
                       ))}
                     </ul>
                   ) : (
-                    "—"
+                    "n/a"
                   )}
                 </td>
               </tr>
@@ -1004,7 +1004,7 @@ export default function ClaimsWeb({
             onSelectEdge={openEdge}
             compact
             theme="paper"
-            hint="Scroll to zoom, drag to move. Click a thread to read the claims. Click a person or company to open their card."
+            hint="Scroll zooms. Drag pans. Click a thread or pin for details."
             statusLegend={{
               confirmed: "Corroborated",
               probable: "Probable",
@@ -1014,7 +1014,7 @@ export default function ClaimsWeb({
         </div>
       ) : (
         <p className="claims-empty">
-          Not enough identities yet to draw the map.
+          Need more identities to draw the map.
         </p>
       )}
 
@@ -1038,7 +1038,7 @@ export default function ClaimsWeb({
               <div className="claim-connection-detail-head">
                 <span className="claim-connection-pair">
                   {activeEdge.fromLabel}{" "}
-                  <span aria-hidden="true">—</span> {activeEdge.toLabel}
+                  <span aria-hidden="true">/</span> {activeEdge.toLabel}
                 </span>
                 <span className="claim-thread-meta">
                   {activeEdge.claims.length}{" "}

@@ -10,8 +10,16 @@
   "vars": {
     "ENVIRONMENT": "demo",
     "IMAGE_PROVIDER": "mock",
-    "IMAGE_MODEL": "meta/muse-image"
+    "IMAGE_MODEL": "meta/muse-image",
+    "CORS_ORIGINS": "https://consta.kahuna.li",
+    "GT_DATA_URL": "https://consta-gt-data.izzodstudios.workers.dev"
   },
+  "routes": [
+    {
+      "pattern": "consta.kahuna.li/api/*",
+      "zone_name": "kahuna.li"
+    }
+  ],
 
   // Base compartida de investigaciones (bd) e imágenes por ocupación.
   // En local, wrangler guarda en .wrangler/. Antes de desplegar, reemplaza
@@ -20,7 +28,7 @@
     {
       "binding": "DB",
       "database_name": "consta",
-      "database_id": "consta-local",
+      "database_id": "fb22214f-65ca-43dc-b870-87fd04ed6df3",
       "migrations_dir": "migrations"
     }
   ]

@@ -82,6 +82,7 @@ const SCORE_SYSTEM = [
   "No cuentes como repetición dos URLs del mismo medio, la misma nota republicada ni el mismo comunicado: eso sigue siendo una sola fuente.",
   'Forma: {"results":[{"url":"https://ejemplo.invalid/fuente","tier":"secondary","official":false,"repetition":"one"}]}',
   "No uses markdown ni puntos suspensivos.",
+  "If you write any prose, write it in English.",
 ].join("\n");
 
 export function confidenceForScore(score: number): IdentityConfidence {

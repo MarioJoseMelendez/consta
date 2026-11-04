@@ -55,6 +55,7 @@ const LOCAL_ORIGINS = new Set([
   "http://127.0.0.1:8787",
   "http://127.0.0.1:8788",
 ]);
+const PRODUCTION_ORIGIN = "https://consta.kahuna.li";
 const PAGES_ORIGIN = /^https:\/\/(?:[a-z0-9-]+\.)*pages\.dev$/i;
 
 const MAX_QUERY_LENGTH = 200;
@@ -175,6 +176,7 @@ function parseExtraOrigins(raw: string | undefined): string[] {
 
 function isAllowedOrigin(origin: string, extraOrigins: readonly string[]): boolean {
   return (
+    origin === PRODUCTION_ORIGIN ||
     LOCAL_ORIGINS.has(origin) ||
     PAGES_ORIGIN.test(origin) ||
     extraOrigins.includes(origin)

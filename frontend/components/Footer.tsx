@@ -1,15 +1,14 @@
 import Link from "next/link";
 
 import DemoBadge from "./DemoBadge";
-import { LogoMark } from "./Icons";
 
 const SOURCES = [
   {
-    label: "RGAE — Proveedores",
+    label: "RGAE Proveedores",
     href: "https://datos.minfin.gob.gt/dataset/registro-de-proveedores",
   },
   {
-    label: "RGAE — Representantes legales",
+    label: "RGAE Representantes legales",
     href: "https://datos.minfin.gob.gt/dataset/registro-de-representantes-legales",
   },
   {
@@ -29,8 +28,7 @@ export default function Footer() {
         <div className="footer-grid">
           <div className="footer-brand">
             <Link className="footer-wordmark" href="/" aria-label="Consta, inicio">
-              <LogoMark width={26} height={26} />
-              <span>CONSTA</span>
+              consta
             </Link>
             <p className="footer-tagline">Del registro a la conexión.</p>
             <p className="footer-copy">

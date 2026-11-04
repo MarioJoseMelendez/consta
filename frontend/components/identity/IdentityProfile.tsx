@@ -91,8 +91,36 @@ export function identityFieldOf(
   );
 }
 
+const ORGANIZATION_CUE =
+  /\b(company|companies|corporation|corp\.|enterprise|empresa|compa[nñ][ií]a|llc|l\.l\.c\.?|inc\.|s\.a\.?|foundation|fundaci[oó]n|organization|organizaci[oó]n|instituci[oó]n|agency|agencia|holdings|limited|ltd\.?|opco)\b/i;
+
+export function identityContextText(
+  candidate: IdentityCandidate,
+  extra?: string | null,
+): string {
+  return [candidate.label, candidate.description, extra]
+    .filter((part) => part?.trim())
+    .join(" ");
+}
+
+/** Type field when the investigation set it; otherwise the public summary. */
+export function identityResolvedKind(
+  candidate: IdentityCandidate,
+  extra?: string | null,
+): string | null {
+  const type = identityFieldOf(candidate, "type");
+  if (type.value?.trim() && type.status !== "not_found") return type.value;
+  if (ORGANIZATION_CUE.test(identityContextText(candidate, extra))) {
+    return "enterprise";
+  }
+  return null;
+}
+
 export function identityDisplayValue(field: IdentityField): string {
-  if (field.status === "not_found" || !field.value?.trim()) return "Not found";
+  if (field.key === "type" && field.value?.trim() && field.status !== "not_found") {
+    return identityTypeLabelEn(field.value);
+  }
+  if (field.status === "not_found" || !field.value?.trim()) return "—";
   if (field.key === "type") return identityTypeLabelEn(field.value);
   return field.value;
 }
@@ -242,23 +270,37 @@ export function OccupationPhoto({
  */
 export default function IdentityProfileFields({
   candidate,
+  context,
 }: {
   candidate: IdentityCandidate;
+  context?: string | null;
 }) {
+  const resolvedKind = identityResolvedKind(candidate, context);
+
   return (
     <div className="identity-fields">
       {IDENTITY_FIELD_DEFINITIONS.map((definition) => {
         const field = identityFieldOf(candidate, definition.key);
+        const inferredType =
+          definition.key === "type" &&
+          resolvedKind === "enterprise" &&
+          (field.status === "not_found" || !field.value?.trim());
         return (
           <article key={definition.key} className="identity-field-card">
             <p className="mono-label">{identityFieldLabelEn(definition.key)}</p>
-            <p className="identity-value">{identityDisplayValue(field)}</p>
+            <p className="identity-value">
+              {inferredType ? "Company" : identityDisplayValue(field)}
+            </p>
             {field.note ? <p className="identity-note">{field.note}</p> : null}
             <p
               className="identity-field-status"
-              data-status={field.confidence ?? field.status}
+              data-status={
+                inferredType ? "found" : (field.confidence ?? field.status)
+              }
             >
-              {identityFieldStatusText(field)}
+              {inferredType
+                ? "From the public summary"
+                : identityFieldStatusText(field)}
             </p>
             {field.sources.length > 0 ? (
               <ul className="identity-sources">

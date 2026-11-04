@@ -11,11 +11,14 @@ import {
   type IdentitySummary,
 } from "@consta/contracts";
 
+import { IconArrowUpRight } from "@/components/Icons";
+
 import ClaimsWeb, { type BranchRequest } from "./ClaimsWeb";
 import IdentityProfileFields, {
   OccupationPhoto,
   identityCandidateSources as candidateSources,
   identityDisplayValue as displayValue,
+  identityResolvedKind,
   identityFieldLabelEn as fieldLabel,
   identityFieldOf as fieldOf,
   identityFieldStatusText as fieldStatusText,
@@ -265,6 +268,7 @@ export default function IdentityPanel() {
     retryConnections,
     investigateBranch,
     searchMore,
+    startOver,
   } = useIdentity();
   const panelRef = useRef<HTMLElement>(null);
   const profileRef = useRef<HTMLDivElement>(null);
@@ -326,11 +330,10 @@ export default function IdentityPanel() {
       >
         <div className="identity-head">
           <p className="eyebrow">QA view</p>
-          <h2 id="identity-qa-title">Connection map with sample data.</h2>
+          <h2 id="identity-qa-title">Sample connection map</h2>
         </div>
         <p className="identity-status">
-          Five demonstration claims. One thread groups claims that join the
-          same pair. Click to open the table or the card.
+          Five demo claims. Threads group the same pair. Click a thread or card.
         </p>
         <ClaimsWeb claims={QA_CLAIMS} summary={QA_SUMMARY} />
       </section>
@@ -360,10 +363,10 @@ export default function IdentityPanel() {
         <p className="eyebrow">Identity</p>
         <h2 id="identity-title">
           {phase === "loading" && !result
-            ? "Searching public sources."
+            ? "Searching public sources"
             : phase === "loading"
-              ? "Searching tax ID, phone, email, legal representative, address, and national ID."
-              : "Candidates with a source."}
+              ? "Checking tax ID, phone, email, legal rep, address, national ID"
+              : "Sourced candidates"}
         </h2>
       </div>
 
@@ -545,19 +548,18 @@ export default function IdentityPanel() {
             <OccupationPhoto
               label={confirmed.label}
               occupation={fieldOf(confirmed, "occupation").value}
-              kind={fieldOf(confirmed, "type").value}
+              kind={identityResolvedKind(confirmed, summary?.who)}
             />
             <figcaption>
-              Found photograph
-              {fieldOf(confirmed, "occupation").value
-                ? ` · ${fieldOf(confirmed, "occupation").value}`
-                : ""}
+              {identityResolvedKind(confirmed, summary?.who) === "enterprise"
+                ? "Company"
+                : fieldOf(confirmed, "occupation").value || "Profile"}
             </figcaption>
           </figure>
 
           <div className="identity-expediente">
             <header className="identity-profile-head">
-              <p className="mono-label">Expediente</p>
+              <p className="mono-label">Record</p>
               <h3>{confirmed.label}</h3>
             </header>
 
@@ -567,7 +569,7 @@ export default function IdentityPanel() {
                 <p>
                   {summary?.who.trim() ||
                     confirmed.description ||
-                    "The subject context is still being resolved."}
+                    "Still gathering context."}
                 </p>
               </div>
               <div>
@@ -575,15 +577,18 @@ export default function IdentityPanel() {
                 <p>
                   {summary?.findings.trim() ||
                     (weaving
-                      ? "Connections are still being mapped."
+                      ? "Still mapping connections."
                       : connectionPhase === "error"
-                        ? "The subject context could not be completed."
-                        : "There is no findings summary yet.")}
+                        ? "Context incomplete."
+                        : "No findings yet.")}
                 </p>
               </div>
             </div>
 
-            <IdentityProfileFields candidate={confirmed} />
+            <IdentityProfileFields
+              candidate={confirmed}
+              context={summary?.who}
+            />
           </div>
         </div>
       ) : null}
@@ -598,9 +603,9 @@ export default function IdentityPanel() {
             <h3 id="identity-connections-title">
               {weaving
                 ? connection
-                  ? "Mapping the next round."
-                  : "Mapping connections."
-                : "What supports the identity."}
+                  ? "Next connection round"
+                  : "Mapping connections"
+                : "Sourced connections"}
             </h3>
           </div>
 
@@ -642,9 +647,9 @@ export default function IdentityPanel() {
                   ? wovenClaims > 0
                     ? `${wovenClaims} ${
                         wovenClaims === 1 ? "claim mapped" : "claims mapped"
-                      } so far. The map updates when each round closes.`
-                    : "No claims have closed in this round yet. The map updates when it does."
-                  : "Phases advance while the work runs. Claims appear when each round closes."}
+                      }. Map updates when the round closes.`
+                    : "No closed claims in this round yet."
+                  : "Claims appear when each round closes."}
               </p>
             </div>
           ) : null}
@@ -835,6 +840,11 @@ export default function IdentityPanel() {
           ))}
         </details>
       ) : null}
+
+      <button type="button" className="identity-fresh" onClick={startOver}>
+        <span>Investigate someone new</span>
+        <IconArrowUpRight width={15} height={15} aria-hidden="true" />
+      </button>
     </section>
   );
 }

@@ -1,5 +1,9 @@
 # Copia este archivo a .dev.vars para desarrollo local.
 # .dev.vars está ignorado por git y no debe contener secretos reales en el repo.
+#
+# No uses `wrangler secret bulk .dev.vars`: CORS_ORIGINS y las otras vars
+# públicas ya están en wrangler.jsonc (error 10053). Para producción:
+#   pnpm --filter @consta/backend secrets
 
 # Entorno reportado por GET /health.
 ENVIRONMENT=demo

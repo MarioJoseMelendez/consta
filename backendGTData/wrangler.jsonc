@@ -9,18 +9,16 @@
   },
   "vars": {
     "ENVIRONMENT": "development"
-  }
+  },
 
-  // Persistencia: se habilita después de la ingesta del snapshot.
-  // Sin binding DB el worker opera en modo demo (datos ficticios de @consta/contracts).
-  // "d1_databases": [
-  //   {
-  //     "binding": "DB",
-  //     "database_name": "consta-gt-data",
-  //     "database_id": "<D1_DATABASE_ID>",
-  //     "migrations_dir": "migrations"
-  //   }
-  // ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "consta-gt-data",
+      "database_id": "8dfde23a-f85a-4f50-bf6d-44e4c0b9ef0c",
+      "migrations_dir": "migrations"
+    }
+  ],
   // "r2_buckets": [
   //   {
   //     "binding": "EVIDENCE_BUCKET",

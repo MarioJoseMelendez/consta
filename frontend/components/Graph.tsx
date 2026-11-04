@@ -57,7 +57,7 @@ const KIND_SHAPE: Record<EntityKind, "circle" | "square"> = {
   unknown: "circle",
 };
 
-const MIN_ZOOM = 0.55;
+const MIN_ZOOM = 0.28;
 const MAX_ZOOM = 3.2;
 
 function wrapLabel(label: string, maxChars: number, maxLines = 2): string[] {
@@ -100,43 +100,29 @@ function wrapLabel(label: string, maxChars: number, maxLines = 2): string[] {
   return lines;
 }
 
-function hopsFromCenter(
-  nodes: GraphNode[],
-  edges: GraphEdge[],
-  centerId: string,
-): Map<string, number> {
-  const hops = new Map<string, number>([[centerId, 0]]);
-  const adjacency = new Map<string, string[]>();
-  for (const edge of edges) {
-    const from = adjacency.get(edge.from) ?? [];
-    from.push(edge.to);
-    adjacency.set(edge.from, from);
-    const to = adjacency.get(edge.to) ?? [];
-    to.push(edge.from);
-    adjacency.set(edge.to, to);
-  }
-  const queue = [centerId];
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (!current) break;
-    const hop = hops.get(current) ?? 0;
-    for (const next of adjacency.get(current) ?? []) {
-      if (hops.has(next)) continue;
-      hops.set(next, hop + 1);
-      queue.push(next);
-    }
-  }
-  for (const node of nodes) {
-    if (!hops.has(node.id)) hops.set(node.id, 1);
-  }
-  return hops;
+function framedCamera(width: number, height: number) {
+  const frameW = 1100;
+  const frameH = 760;
+  if (width <= frameW && height <= frameH) return { x: 0, y: 0, k: 1 };
+  const k = clamp(
+    Math.min(width / frameW, height / frameH),
+    1,
+    MAX_ZOOM,
+  );
+  const viewW = width / k;
+  const viewH = height / k;
+  return {
+    k,
+    x: (width - viewW) / 2,
+    y: (height - viewH) / 2,
+  };
 }
 
 function buildLayout(
   nodes: GraphNode[],
   edges: GraphEdge[],
   centerId: string | undefined,
-  compact: boolean,
+  _compact: boolean,
   narrow: boolean,
 ): {
   nodes: NodeLayout[];
@@ -145,29 +131,38 @@ function buildLayout(
   height: number;
   small: boolean;
 } {
-  const small = compact || narrow;
-  const width = narrow ? 560 : compact ? 920 : 980;
-  const height = narrow ? 640 : compact ? 680 : 720;
-  const center = { x: width / 2, y: height / 2 };
-  const innerR = narrow ? 170 : compact ? 220 : 240;
-  const outerR = narrow ? 250 : compact ? 310 : 340;
-
+  const small = narrow;
   const centerNode = nodes.find((node) => node.id === centerId) ?? nodes[0];
   if (!centerNode) {
-    return { nodes: [], edges: [], width, height, small };
+    return { nodes: [], edges: [], width: 980, height: 720, small };
   }
 
-  const hops = hopsFromCenter(nodes, edges, centerNode.id);
-  const inner: GraphNode[] = [];
-  const outer: GraphNode[] = [];
-  for (const node of nodes) {
-    if (node.id === centerNode.id) continue;
-    if ((hops.get(node.id) ?? 1) <= 1) inner.push(node);
-    else outer.push(node);
+  const others = nodes.filter((node) => node.id !== centerNode.id);
+  const minArc = narrow ? 118 : 148;
+  const ringGap = narrow ? 132 : 168;
+  const firstRadius = narrow ? 168 : 210;
+  const rings: Array<{ nodes: GraphNode[]; radius: number }> = [];
+  let pending = others;
+  let radius = firstRadius;
+  while (pending.length > 0) {
+    const capacity = Math.max(
+      6,
+      Math.floor((Math.PI * 2 * radius) / minArc),
+    );
+    rings.push({ nodes: pending.slice(0, capacity), radius });
+    pending = pending.slice(capacity);
+    radius += ringGap;
   }
 
-  const selectedRadius = narrow ? 24 : compact ? 26 : 28;
-  const otherRadius = narrow ? 18 : compact ? 20 : 22;
+  const outerRadius = rings.length > 0 ? rings[rings.length - 1].radius : firstRadius;
+  const pad = narrow ? 120 : 160;
+  const size = Math.max(narrow ? 720 : 980, Math.ceil((outerRadius + pad) * 2));
+  const width = size;
+  const height = size;
+  const center = { x: width / 2, y: height / 2 };
+
+  const selectedRadius = narrow ? 26 : 32;
+  const otherRadius = narrow ? 18 : 22;
   const positions = new Map<string, NodeLayout>();
 
   positions.set(centerNode.id, {
@@ -175,25 +170,22 @@ function buildLayout(
     x: center.x,
     y: center.y,
     r: selectedRadius,
-    labelLines: wrapLabel(centerNode.label, narrow ? 16 : 20),
+    labelLines: wrapLabel(centerNode.label, narrow ? 16 : 18),
   });
 
-  const placeRing = (ring: GraphNode[], radius: number, turn: number) => {
-    ring.forEach((node, index) => {
-      const angle =
-        turn + (index * Math.PI * 2) / Math.max(ring.length, 1);
+  rings.forEach((ring, ringIndex) => {
+    const turn = -Math.PI / 2 + ringIndex * (Math.PI / Math.max(ring.nodes.length, 6));
+    ring.nodes.forEach((node, index) => {
+      const angle = turn + (index * Math.PI * 2) / Math.max(ring.nodes.length, 1);
       positions.set(node.id, {
         ...node,
-        x: center.x + Math.cos(angle) * radius,
-        y: center.y + Math.sin(angle) * radius,
+        x: center.x + Math.cos(angle) * ring.radius,
+        y: center.y + Math.sin(angle) * ring.radius,
         r: otherRadius,
-        labelLines: wrapLabel(node.label, narrow ? 14 : compact ? 16 : 18),
+        labelLines: wrapLabel(node.label, narrow ? 12 : 14),
       });
     });
-  };
-
-  placeRing(inner, innerR, -Math.PI / 2);
-  placeRing(outer, outerR, -Math.PI / 2 + Math.PI / 8);
+  });
 
   const edgeLayouts: EdgeLayout[] = [];
 
@@ -305,8 +297,9 @@ export default function Graph({
   );
 
   useEffect(() => {
-    setCamera({ x: 0, y: 0, k: 1 });
-    cameraRef.current = { x: 0, y: 0, k: 1 };
+    const next = framedCamera(layout.width, layout.height);
+    setCamera(next);
+    cameraRef.current = next;
   }, [layout.width, layout.height, layoutCenterId]);
 
   useEffect(() => {
@@ -426,7 +419,7 @@ export default function Graph({
   }
 
   function resetView() {
-    const next = { x: 0, y: 0, k: 1 };
+    const next = framedCamera(layout.width, layout.height);
     cameraRef.current = next;
     setCamera(next);
   }
@@ -499,6 +492,7 @@ export default function Graph({
       }${onSelect ? " is-interactive" : " is-static"}${
         onSelectEdge ? " is-edge-interactive" : ""
       }${className ? ` ${className}` : ""}`}
+      data-labels={layout.edges.length > 10 ? "hover" : "all"}
     >
       <div
         ref={viewportRef}

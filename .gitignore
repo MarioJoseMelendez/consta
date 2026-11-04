@@ -7,5 +7,6 @@ dist
 .env
 .env.local
 .dev.vars
+.secrets-bulk.env
 *.log
 .DS_Store

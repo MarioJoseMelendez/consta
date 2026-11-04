@@ -12,7 +12,7 @@
     "typecheck": "pnpm -r typecheck",
     "build": "pnpm -r build",
     "build:web": "pnpm --filter @consta/frontend build",
-    "deploy:api": "pnpm --filter @consta/backend deploy",
-    "deploy:gt": "pnpm --filter @consta/gt-data deploy"
+    "deploy:api": "pnpm --filter @consta/backend run deploy",
+    "deploy:gt": "pnpm --filter @consta/gt-data run deploy"
   }
 }
