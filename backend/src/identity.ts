@@ -100,10 +100,15 @@ const SEARCH_TIMEOUT_MS = 12_000;
 const MODEL_TIMEOUT_MS = 45_000;
 const PLAN_MAX_TOKENS = 900;
 const ROUND_MAX_TOKENS = 4_500;
+/**
+ * Cadena de respaldo en OpenRouter cuando NVIDIA no responde. Todos son LLMs
+ * free con salida de texto; el primero es Llama.
+ */
 const IDENTITY_MODELS = [
+  "meta-llama/llama-3.3-70b-instruct:free",
   "nvidia/nemotron-3.5-lightning:free",
   "google/gemma-4-31b-it:free",
-  "openrouter/free",
+  "qwen/qwen3-235b-a22b:free",
 ] as const;
 
 const FIELD_KEYS = new Set<string>(IDENTITY_FIELD_KEYS);

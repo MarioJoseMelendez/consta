@@ -26,6 +26,9 @@ export interface GeneralEnv {
   NVIDIA_API_KEY?: string;
   NVIDIA_BASE_URL?: string;
   NVIDIA_MODEL?: string;
+  /** ReAPI key for image generation (muse-image). */
+  REAPI_KEY?: string;
+  REAPI_BASE_URL?: string;
   /** Binding D1 de la base compartida de investigaciones e imágenes. */
   DB?: D1Database;
   IMAGE_PROVIDER?: string;
@@ -149,23 +152,38 @@ const OPENROUTER_DEFAULT_MAX_TOKENS = 1200;
 const OPENROUTER_MAX_MODELS = 8;
 const OPENROUTER_MODEL_CACHE_TTL_MS = 10 * 60 * 1000;
 
-/** Modelos free de respaldo si `/models` no responde. */
+/** Modelos free de respaldo si `/models` no responde. Solo LLMs con texto. */
 export const PREFERRED_FREE_TEXT_MODELS: readonly string[] = [
+  "meta-llama/llama-3.3-70b-instruct:free",
   "nvidia/nemotron-3.5-lightning:free",
   "google/gemma-4-31b-it:free",
+  "qwen/qwen3-235b-a22b:free",
   "openrouter/free",
 ];
 
 /**
+ * Modelo principal: el mejor Llama disponible en el tier free de NVIDIA.
+ * La cuenta expone Llama 3.2 90B, que responde en segundos y devuelve JSON
+ * estable. Los ids más grandes (Nemotron Ultra 253B, Nemotron 70B) aparecen
+ * en `/models` pero devuelven 404 para esta cuenta, así que quedan fuera.
+ */
+const NVIDIA_LLAMA_MODELS: readonly string[] = [
+  "meta/llama-3.2-90b-vision-instruct",
+];
+
+/**
  * NVIDIA NIM habla el mismo protocolo que OpenRouter y comparte su propia
- * cuota, así que es el respaldo cuando OpenRouter agota la diaria de los
- * modelos free. Los dos modelos aceptan `reasoning` y devuelven JSON.
+ * cuota. Estos modelos van después de Llama y antes de OpenRouter.
  */
 const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
-const NVIDIA_DEFAULT_MODELS: readonly string[] = [
+const NVIDIA_FREE_FALLBACK_MODELS: readonly string[] = [
   "nvidia/nemotron-3.5-lightning-30b-a3b",
   "nvidia/nemotron-3.5-bolt-e4b",
 ];
+
+/** Descarta modelos free que no son LLM de texto. */
+const NON_LLM_MODEL_PATTERN =
+  /(?:^|[/_-])(?:embed|embedding|rerank|moderation|guard|whisper|tts|audio|transcribe|speech|image|flux|sdxl|dall-e|stable-diffusion)/i;
 
 /**
  * La cuota `free-models-per-day` la comparten todos los modelos `:free` de
@@ -415,6 +433,7 @@ function isFreeTextModel(value: unknown): string | null {
 
   const id = typeof value.id === "string" ? value.id.trim() : "";
   if (!id.endsWith(":free")) return null;
+  if (NON_LLM_MODEL_PATTERN.test(id)) return null;
 
   const architecture = isRecord(value.architecture) ? value.architecture : null;
   if (!architecture) return null;
@@ -913,6 +932,66 @@ export async function callOpenRouter(
 
   const providers: ProviderTarget[] = [];
 
+  // 1) NVIDIA Llama: el modelo principal.
+  const nvidiaKey = env.NVIDIA_API_KEY?.trim();
+  let nvidiaUrl: URL | null = null;
+  let nvidiaHeaders: Record<string, string> | null = null;
+  let nvidiaLlama: string[] = [];
+  let nvidiaRest: string[] = [];
+  if (nvidiaKey) {
+    const baseUrl = env.NVIDIA_BASE_URL?.trim() || NVIDIA_BASE_URL;
+    try {
+      nvidiaUrl = joinEndpoint(baseUrl, "/chat/completions");
+    } catch {
+      return {
+        ok: false,
+        text: "",
+        model: null,
+        attempts,
+        error: {
+          code: "invalid_config",
+          message: "NVIDIA_BASE_URL no es una URL válida.",
+        },
+      };
+    }
+
+    const configured = env.NVIDIA_MODEL?.trim();
+    const configuredIsLlama = Boolean(configured && /llama/i.test(configured));
+    nvidiaLlama = dedupeModels([
+      ...(configuredIsLlama ? [configured!] : []),
+      ...NVIDIA_LLAMA_MODELS,
+    ]);
+    nvidiaRest = dedupeModels([
+      ...(configured && !configuredIsLlama ? [configured] : []),
+      ...NVIDIA_FREE_FALLBACK_MODELS,
+    ]).filter((id) => !nvidiaLlama.includes(id));
+    nvidiaHeaders = {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${nvidiaKey}`,
+    };
+  }
+
+  if (nvidiaUrl && nvidiaHeaders && nvidiaLlama.length > 0) {
+    providers.push({
+      provider: "nvidia",
+      url: nvidiaUrl,
+      headers: nvidiaHeaders,
+      models: nvidiaLlama,
+    });
+  }
+
+  // 2) Resto de modelos free de NVIDIA.
+  if (nvidiaUrl && nvidiaHeaders && nvidiaRest.length > 0) {
+    providers.push({
+      provider: "nvidia",
+      url: nvidiaUrl,
+      headers: nvidiaHeaders,
+      models: nvidiaRest,
+    });
+  }
+
+  // 3) OpenRouter: solo modelos free que son LLMs de texto.
   const openRouterKey = env.OPENROUTER_API_KEY?.trim();
   if (openRouterKey) {
     const baseUrl = env.OPENROUTER_BASE_URL?.trim() || OPENROUTER_BASE_URL;
@@ -933,19 +1012,6 @@ export async function callOpenRouter(
     }
 
     const models = await resolveOpenRouterModels(env, options, timeoutMs);
-    if (models.length === 0 && !env.NVIDIA_API_KEY?.trim()) {
-      return {
-        ok: false,
-        text: "",
-        model: null,
-        attempts,
-        error: {
-          code: "no_models",
-          message: "No hay modelos free con salida de texto disponibles.",
-        },
-      };
-    }
-
     if (models.length > 0) {
       const headers: Record<string, string> = {
         Accept: "application/json",
@@ -958,43 +1024,13 @@ export async function callOpenRouter(
       if (env.OPENROUTER_APP_NAME?.trim()) {
         headers["X-Title"] = env.OPENROUTER_APP_NAME.trim();
       }
-      providers.push({ provider: "openrouter", url, headers, models });
+      providers.push({
+        provider: "openrouter",
+        url,
+        headers,
+        models,
+      });
     }
-  }
-
-  const nvidiaKey = env.NVIDIA_API_KEY?.trim();
-  if (nvidiaKey) {
-    const baseUrl = env.NVIDIA_BASE_URL?.trim() || NVIDIA_BASE_URL;
-    let url: URL;
-    try {
-      url = joinEndpoint(baseUrl, "/chat/completions");
-    } catch {
-      return {
-        ok: false,
-        text: "",
-        model: null,
-        attempts,
-        error: {
-          code: "invalid_config",
-          message: "NVIDIA_BASE_URL no es una URL válida.",
-        },
-      };
-    }
-
-    const preferred = env.NVIDIA_MODEL?.trim();
-    const models = preferred
-      ? [preferred, ...NVIDIA_DEFAULT_MODELS.filter((id) => id !== preferred)]
-      : [...NVIDIA_DEFAULT_MODELS];
-    providers.push({
-      provider: "nvidia",
-      url,
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${nvidiaKey}`,
-      },
-      models: models.slice(0, 2),
-    });
   }
 
   if (providers.length === 0) {
@@ -1012,8 +1048,10 @@ export async function callOpenRouter(
   }
 
   let lastError: GeneralError | undefined;
+  let nvidiaKeyRejected = false;
 
   for (const provider of providers) {
+    if (provider.provider === "nvidia" && nvidiaKeyRejected) continue;
     let stopProvider = false;
 
     for (const model of provider.models) {
@@ -1055,6 +1093,7 @@ export async function callOpenRouter(
           }
 
           if (error.code === "unauthorized" && !isModelScopedUnauthorized(error, model)) {
+            if (provider.provider === "nvidia") nvidiaKeyRejected = true;
             stopProvider = true;
             break;
           }

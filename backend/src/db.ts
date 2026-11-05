@@ -579,6 +579,88 @@ export async function saveOccupationImage(
     .run();
 }
 
+/* --------------------------------------------------------------------------
+   Tareas de generación de imágenes (ReAPI es asíncrono)
+   -------------------------------------------------------------------------- */
+
+export interface OccupationTask {
+  occupation: string;
+  taskId: string;
+  attempts: number;
+  submittedAt: number;
+}
+
+export async function readOccupationTask(
+  db: D1Database | undefined,
+  occupation: string,
+): Promise<OccupationTask | null> {
+  if (!db) return null;
+  const key = savedKey(occupation);
+  if (!key) return null;
+  try {
+    const row = await db
+      .prepare(
+        `SELECT occupation, task_id, attempts, submitted_at
+         FROM occupation_tasks
+         WHERE occupation_key = ?`,
+      )
+      .bind(key)
+      .first<Record<string, unknown>>();
+    if (!row || typeof row.task_id !== "string") return null;
+    return {
+      occupation:
+        typeof row.occupation === "string" ? row.occupation : occupation,
+      taskId: row.task_id,
+      attempts: typeof row.attempts === "number" ? row.attempts : 1,
+      submittedAt:
+        typeof row.submitted_at === "number" ? row.submitted_at : Date.now(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function saveOccupationTask(
+  db: D1Database | undefined,
+  occupation: string,
+  taskId: string,
+  attempts: number,
+): Promise<void> {
+  if (!db) return;
+  const key = savedKey(occupation);
+  if (!key) return;
+  await db
+    .prepare(
+      `INSERT INTO occupation_tasks (
+        occupation_key, occupation, task_id, attempts, submitted_at
+      ) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(occupation_key) DO UPDATE SET
+        occupation = excluded.occupation,
+        task_id = excluded.task_id,
+        attempts = excluded.attempts,
+        submitted_at = excluded.submitted_at`,
+    )
+    .bind(key, textOf(occupation, 200), taskId, attempts, Date.now())
+    .run();
+}
+
+export async function deleteOccupationTask(
+  db: D1Database | undefined,
+  occupation: string,
+): Promise<void> {
+  if (!db) return;
+  const key = savedKey(occupation);
+  if (!key) return;
+  try {
+    await db
+      .prepare("DELETE FROM occupation_tasks WHERE occupation_key = ?")
+      .bind(key)
+      .run();
+  } catch {
+    // Sin la tabla la generación igual funciona; solo se pierde la reanudación.
+  }
+}
+
 const OCCUPATION_PART_MAX = 80;
 const OCCUPATION_LIST_MAX = 6;
 const IGNORED_OCCUPATION_KEYS = new Set([

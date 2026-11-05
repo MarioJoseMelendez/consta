@@ -43,8 +43,12 @@ ENVIRONMENT=demo
 # NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
 # NVIDIA_MODEL=nvidia/nemotron-3.5-lightning-30b-a3b
 
-# Imágenes pixel art por ocupación. `mock` genera SVG local, sin llamadas.
-# `openrouter` o `nvidia` hacen una sola llamada; si falla, se usa `persona`.
+# Imágenes pixel art por ocupación.
+# `reapi` usa muse-image (requiere REAPI_KEY): un envío y un solo reintento;
+# la tarea se guarda en D1 para reanudarla sin pagar otra imagen.
+# `mock` genera SVG local, sin llamadas. `openrouter` y `nvidia` son legados.
 # Las empresas nunca generan retratos: usan el placeholder `empresa`.
-# IMAGE_PROVIDER=mock
-# IMAGE_MODEL=meta/muse-image
+# REAPI_KEY=
+# REAPI_BASE_URL=https://reapi.ai/api/v1
+# IMAGE_PROVIDER=reapi
+# IMAGE_MODEL=muse-image

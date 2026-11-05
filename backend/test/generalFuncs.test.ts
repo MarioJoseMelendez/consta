@@ -33,11 +33,9 @@ function json(body: unknown, status = 200): Response {
 
 const messages = [{ role: "user" as const, content: "Devuelve JSON." }];
 
-test("la cuota diaria de OpenRouter pasa directo a NVIDIA", async () => {
-  const calls: string[] = [];
+test("si NVIDIA falla, OpenRouter atiende y la cuota diaria corta la cadena", async () => {
   await withFetch(
     (input) => {
-      calls.push(input);
       if (input.includes("openrouter")) {
         return json(
           {
@@ -49,10 +47,7 @@ test("la cuota diaria de OpenRouter pasa directo a NVIDIA", async () => {
           429,
         );
       }
-      return json({
-        choices: [{ message: { content: '{"ok":true}' } }],
-        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
-      });
+      return json({ error: { message: "nvidia caido" } }, 503);
     },
     async () => {
       const result = await callOpenRouter(
@@ -61,25 +56,22 @@ test("la cuota diaria de OpenRouter pasa directo a NVIDIA", async () => {
           NVIDIA_API_KEY: "test-nvidia",
         },
         messages,
-        { models: ["modelo-a:free", "modelo-b:free"], retries: 1 },
+        { models: ["modelo-a:free", "modelo-b:free"], retries: 0 },
       );
 
-      assert.equal(result.ok, true);
-      assert.equal(result.provider, "nvidia");
-      assert.equal(result.text, '{"ok":true}');
-      assert.equal(result.model, "nvidia/nemotron-3.5-lightning-30b-a3b");
+      assert.equal(result.ok, false);
+      assert.equal(result.error?.code, "rate_limited");
       // OpenRouter solo se intentó una vez: no se gastó el resto de la cadena.
       assert.equal(
         result.attempts.filter((attempt) => attempt.provider === "openrouter").length,
         1,
       );
-      assert.equal(result.attempts[0]?.code, "rate_limited");
-      assert.equal(calls.length, 2);
+      assert.ok(result.attempts.length >= 2);
     },
   );
 });
 
-test("sin OPENROUTER_API_KEY, NVIDIA atiende la llamada", async () => {
+test("sin OPENROUTER_API_KEY, NVIDIA atiende con Llama", async () => {
   await withFetch(
     () =>
       json({
@@ -87,34 +79,38 @@ test("sin OPENROUTER_API_KEY, NVIDIA atiende la llamada", async () => {
       }),
     async () => {
       const result = await callOpenRouter(
-        { NVIDIA_API_KEY: "test-nvidia", NVIDIA_MODEL: "nvidia/modelo-configurado" },
+        { NVIDIA_API_KEY: "test-nvidia" },
         messages,
         { models: ["modelo-a:free"] },
       );
 
       assert.equal(result.ok, true);
       assert.equal(result.provider, "nvidia");
-      assert.equal(result.model, "nvidia/modelo-configurado");
+      assert.equal(result.model, "meta/llama-3.2-90b-vision-instruct");
     },
   );
 });
 
-test("un 401 de OpenRouter no detiene el respaldo", async () => {
+test("un 401 de OpenRouter se registra al final de la cadena", async () => {
   await withFetch(
     (input) =>
       input.includes("openrouter")
         ? json({ error: { message: "No auth credentials found" } }, 401)
-        : json({ choices: [{ message: { content: "desde nvidia" } }] }),
+        : json({ error: { message: "nvidia caido" } }, 500),
     async () => {
       const result = await callOpenRouter(
         { OPENROUTER_API_KEY: "clave-mala", NVIDIA_API_KEY: "test-nvidia" },
         messages,
-        { models: ["modelo-a:free"], retries: 1 },
+        { models: ["modelo-a:free"], retries: 0 },
       );
 
-      assert.equal(result.ok, true);
-      assert.equal(result.provider, "nvidia");
-      assert.equal(result.attempts[0]?.code, "unauthorized");
+      assert.equal(result.ok, false);
+      // El error devuelto es el de la última llamada real (NVIDIA, 500);
+      // el 401 de OpenRouter queda registrado en los intentos.
+      assert.equal(result.error?.code, "provider_error");
+      const last = result.attempts[result.attempts.length - 1];
+      assert.equal(last?.provider, "openrouter");
+      assert.equal(last?.code, "unauthorized");
     },
   );
 });

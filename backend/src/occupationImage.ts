@@ -10,9 +10,12 @@
 import type { IdentityCandidate, IdentityEntity, IdentityProfileType } from "@consta/contracts";
 import type { GeneralEnv } from "./generalFuncs";
 import {
+  deleteOccupationTask,
   occupationCandidates,
   readOccupationImage,
+  readOccupationTask,
   saveOccupationImage,
+  saveOccupationTask,
   savedKey,
   type OccupationImage,
 } from "./db";
@@ -47,19 +50,27 @@ export interface ResolveOccupationImageOptions {
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
+const REAPI_BASE_URL = "https://reapi.ai/api/v1";
 const IMAGE_TIMEOUT_MS = 12_000;
 const IMAGE_SIZE = 256;
 const PLACEHOLDER_PROVIDER = "placeholder";
+/** muse-image tarda de segundos a minutos; se sondea por ventanas cortas. */
+const REAPI_POLL_INTERVAL_MS = 1_500;
+const REAPI_POLL_WINDOW_MS = 20_000;
+const REAPI_MAX_SUBMISSIONS = 2;
+const REAPI_TASK_MAX_AGE_MS = 10 * 60 * 1000;
 
 const generating = new Map<string, Promise<OccupationImage | null>>();
 
 export function imageProvider(env: {
   IMAGE_PROVIDER?: string;
   IMAGE_MODEL?: string;
+  REAPI_KEY?: string;
 }): ImageProviderConfig {
   return {
-    provider: env.IMAGE_PROVIDER?.trim() || "mock",
-    model: env.IMAGE_MODEL?.trim() || "meta/muse-image",
+    provider:
+      env.IMAGE_PROVIDER?.trim() || (env.REAPI_KEY?.trim() ? "reapi" : "mock"),
+    model: env.IMAGE_MODEL?.trim() || "muse-image",
   };
 }
 
@@ -340,9 +351,12 @@ export async function queueOccupationImages(
 }
 
 /**
- * One generation attempt, and only on a D1 miss. Failures persist the
- * persona placeholder under the occupation key so the model is not called
- * again for that cargo.
+ * One generation path per occupation, and only on a D1 miss. ReAPI is
+ * asynchronous: the task id is stored so a later request resumes the same
+ * task instead of paying for a second image. There are at most two
+ * submissions (the initial one and a single retry); after that the persona
+ * placeholder is persisted under the occupation key and the model is never
+ * called again for that cargo.
  */
 export async function generateOccupationImageIfMissing(
   db: D1Database | undefined,
@@ -362,8 +376,12 @@ export async function generateOccupationImageIfMissing(
     if (stored?.failed) return null;
     if (stored) return stored.image;
 
-    const generated = await generateOccupationImage(env, primary);
     const config = imageProvider(env);
+    if (config.provider.trim().toLowerCase() === "reapi") {
+      return generateWithReapiTask(db, env, config, primary);
+    }
+
+    const generated = await generateOccupationImage(env, primary);
     try {
       if (generated) {
         await saveOccupationImage(db, primary, generated, config.provider, config.model);
@@ -388,6 +406,74 @@ export async function generateOccupationImageIfMissing(
   return task;
 }
 
+async function generateWithReapiTask(
+  db: D1Database,
+  env: GeneralEnv,
+  config: ImageProviderConfig,
+  occupation: string,
+): Promise<OccupationImage | null> {
+  const prompt = occupationImagePrompt(occupation);
+  let current = await readOccupationTask(db, occupation);
+  if (current && Date.now() - current.submittedAt > REAPI_TASK_MAX_AGE_MS) {
+    // Una tarea abandonada ya no se puede cobrar dos veces: se descarta.
+    await deleteOccupationTask(db, occupation);
+    current = null;
+  }
+  let attempts = current?.attempts ?? 0;
+
+  while (attempts < REAPI_MAX_SUBMISSIONS) {
+    if (!current) {
+      const taskId = await submitReapiTask(env, config, prompt);
+      attempts += 1;
+      if (!taskId) continue; // un solo reintento
+      await saveOccupationTask(db, occupation, taskId, attempts);
+      current = {
+        occupation,
+        taskId,
+        attempts,
+        submittedAt: Date.now(),
+      };
+    }
+
+    const outcome = await pollReapiTask(env, current.taskId, REAPI_POLL_WINDOW_MS);
+    if (outcome.status === "completed") {
+      const image = await downloadReapiImage(outcome.imageUrl);
+      if (!image) {
+        // La tarea terminó pero la descarga falló: se conserva el id para
+        // reintentar la descarga sin pagar otra imagen.
+        return null;
+      }
+      await deleteOccupationTask(db, occupation);
+      try {
+        await saveOccupationImage(db, occupation, image, config.provider, config.model);
+      } catch {
+        // La imagen se devuelve igual; el siguiente acceso la vuelve a guardar.
+      }
+      return image;
+    }
+    if (outcome.status === "failed") {
+      await deleteOccupationTask(db, occupation);
+      current = null;
+      continue; // un solo reintento
+    }
+    // Sigue procesando: se conserva la tarea y otra visita la reanuda.
+    return null;
+  }
+
+  try {
+    await saveOccupationImage(
+      db,
+      occupation,
+      placeholderArt(PLACEHOLDER_PERSONA),
+      PLACEHOLDER_PROVIDER,
+      PLACEHOLDER_PROVIDER,
+    );
+  } catch {
+    // El placeholder en memoria sigue sirviendo.
+  }
+  return null;
+}
+
 /** Detailed pixel-art brief used for the single image-model call. */
 export function occupationImagePrompt(occupation: string): string {
   const kind = occupationKind(occupation);
@@ -410,16 +496,16 @@ export function occupationImagePrompt(occupation: string): string {
   };
 
   return [
-    "Create one square identification photograph for a journalist's public-records dossier.",
-    "Style: authentic 1990s desktop pixel art, chunky square pixels, crisp edges, no anti-aliasing, no blur, no gradients that are not dithered, no photorealism, no 3D render, no cinematic lighting, no airbrush.",
-    `Canvas: strictly square 1:1, logical grid 24 by 24 pixels, output ${IMAGE_SIZE} by ${IMAGE_SIZE} pixels so each logical pixel is a solid block.`,
-    "Framing: centered front-facing bust, head and shoulders, eye-level, subject looking at camera, generous margin, no crop through the skull or chin.",
-    "Palette: at most eight flat colors. Background fill #1C1C1E (ink). Allowed accents #EEF3EA (mint paper) and #248A3D (archive green). Skin, hair, and clothing may use muted companions of those inks. No neon glow.",
+    "Create one square 1:1 identification portrait for a journalist's public-records dossier.",
+    "Style: detailed 32-bit era pixel art illustration made of hand-placed square pixels, chunky but rich in detail, crisp hard edges, no anti-aliasing, no blur, no soft gradients (ordered dithering only), no photorealism, no 3D render, no airbrush, no smooth vector look, no painterly AI texture.",
+    "Pixel craft: readable silhouette, deliberate pixel clusters, three to four tones per material, dithered shadow transitions, every pixel intentional, nearest-neighbor sprite look, no sub-pixel detail that disappears when scaled.",
+    "Framing: centered front-facing head-and-shoulders bust, eye level, subject looking at camera, generous margin, no crop through the skull or chin.",
+    "Palette: limited to at most twelve flat colors. Background fill #1C1C1E (ink). Accents #EEF3EA (mint paper) and #248A3D (archive green). Skin, hair, and clothing use muted companions of those inks. No neon glow.",
     `Subject: a generic adult whose clothing and one small prop communicate the occupation "${occupation}" (${kind}: ${cues[kind]}).`,
     "The person is fictional and anonymous. Do not depict a celebrity, a real public official, a watermark, a signature, or a recognizable trademark.",
     "Composition: single subject, no crowd, no extra figures, no animals, no vehicles filling the frame, no scenery beyond a flat wall or desk band at the bottom.",
     "Constraints: no letters, numbers, words, captions, UI, polaroid frame, drop shadow, sticker, or watermark inside the pixels. No photoreal skin pores. No violence. No nudity.",
-    "Mood: archival evidence photo, calm, readable at 96px. The picture must still parse as a person in a pixel-art ID portrait when scaled with nearest-neighbor.",
+    "Mood: archival evidence photo, calm, high contrast, still readable as a person in a pixel-art ID portrait when scaled down.",
   ].join(" ");
 }
 
@@ -429,7 +515,29 @@ export async function generateOccupationImage(
 ): Promise<OccupationImage | null> {
   const config = imageProvider(env);
   if (config.provider === "mock") return pixelArtFor(occupation);
+  if (config.provider.trim().toLowerCase() === "reapi") {
+    return generateReapiImage(env, config, occupation);
+  }
   return requestOccupationImage(env, config, occupation);
+}
+
+/** Sin D1 no hay tarea que reanudar: un envío y, si falla, un reintento. */
+async function generateReapiImage(
+  env: GeneralEnv,
+  config: ImageProviderConfig,
+  occupation: string,
+): Promise<OccupationImage | null> {
+  const prompt = occupationImagePrompt(occupation);
+  for (let attempt = 1; attempt <= REAPI_MAX_SUBMISSIONS; attempt += 1) {
+    const taskId = await submitReapiTask(env, config, prompt);
+    if (!taskId) continue;
+    const outcome = await pollReapiTask(env, taskId, REAPI_POLL_WINDOW_MS);
+    if (outcome.status === "completed") {
+      return downloadReapiImage(outcome.imageUrl);
+    }
+    if (outcome.status === "pending") return null;
+  }
+  return null;
 }
 
 /**
@@ -660,6 +768,131 @@ function joinEndpoint(base: string, path: string): URL {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function reapiConfig(env: GeneralEnv): { key: string; base: string } | null {
+  const key = env.REAPI_KEY?.trim();
+  if (!key) return null;
+  return { key, base: env.REAPI_BASE_URL?.trim() || REAPI_BASE_URL };
+}
+
+async function submitReapiTask(
+  env: GeneralEnv,
+  config: ImageProviderConfig,
+  prompt: string,
+): Promise<string | null> {
+  const auth = reapiConfig(env);
+  if (!auth) return null;
+  try {
+    const response = await fetch(
+      joinEndpoint(auth.base, "/images/generations").toString(),
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${auth.key}`,
+        },
+        body: JSON.stringify({
+          model: config.model,
+          prompt,
+          aspect_ratio: "1:1",
+          n: 1,
+        }),
+        signal: AbortSignal.timeout(IMAGE_TIMEOUT_MS),
+      },
+    );
+    if (!response.ok) return null;
+    const payload: unknown = await response.json();
+    if (!isRecord(payload)) return null;
+    const id = typeof payload.id === "string" ? payload.id.trim() : "";
+    return id || null;
+  } catch {
+    return null;
+  }
+}
+
+type ReapiOutcome =
+  | { status: "completed"; imageUrl: string }
+  | { status: "failed" }
+  | { status: "pending" };
+
+async function pollReapiTask(
+  env: GeneralEnv,
+  taskId: string,
+  windowMs: number,
+): Promise<ReapiOutcome> {
+  const auth = reapiConfig(env);
+  if (!auth) return { status: "failed" };
+  const deadline = Date.now() + windowMs;
+
+  for (;;) {
+    try {
+      const response = await fetch(
+        joinEndpoint(
+          auth.base,
+          `/tasks/${encodeURIComponent(taskId)}`,
+        ).toString(),
+        {
+          headers: {
+            Accept: "application/json",
+            Authorization: `Bearer ${auth.key}`,
+          },
+          signal: AbortSignal.timeout(IMAGE_TIMEOUT_MS),
+        },
+      );
+      if (response.ok) {
+        const payload: unknown = await response.json();
+        if (isRecord(payload)) {
+          const status =
+            typeof payload.status === "string" ? payload.status.trim() : "";
+          if (status === "completed") {
+            const imageUrl = reapiImageUrl(payload);
+            return imageUrl
+              ? { status: "completed", imageUrl }
+              : { status: "failed" };
+          }
+          if (status === "failed") return { status: "failed" };
+        }
+      }
+    } catch {
+      // Un fallo de sondeo no cancela la tarea; se reintenta en la ventana.
+    }
+
+    if (Date.now() >= deadline) return { status: "pending" };
+    await sleep(REAPI_POLL_INTERVAL_MS);
+  }
+}
+
+function reapiImageUrl(payload: Record<string, unknown>): string | null {
+  const output = isRecord(payload.output) ? payload.output : null;
+  if (output && Array.isArray(output.image_urls)) {
+    const first = output.image_urls.find(
+      (item): item is string => typeof item === "string" && /^https?:\/\//i.test(item),
+    );
+    if (first) return first;
+  }
+  return null;
+}
+
+async function downloadReapiImage(imageUrl: string): Promise<OccupationImage | null> {
+  try {
+    const response = await fetch(imageUrl, {
+      signal: AbortSignal.timeout(IMAGE_TIMEOUT_MS * 2),
+    });
+    if (!response.ok) return null;
+    const bytes = await response.arrayBuffer();
+    if (bytes.byteLength < 128) return null;
+    const contentType = response.headers.get("content-type") ?? "";
+    const mime = contentType.split(";")[0]?.trim() || "image/webp";
+    return { mime, width: IMAGE_SIZE, height: IMAGE_SIZE, bytes };
+  } catch {
+    return null;
+  }
 }
 
 async function requestOccupationImage(

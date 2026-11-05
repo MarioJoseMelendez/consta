@@ -44,15 +44,31 @@ function json(body: unknown, status = 200): Response {
 
 function fakeOccupationDb(initial: Map<string, Record<string, unknown>> = new Map()) {
   const rows = new Map(initial);
+  const tasks = new Map<string, Record<string, unknown>>();
   const written: Array<{ key: string; provider: string }> = [];
   const db = {
-    prepare() {
+    prepare(sql: string) {
+      const isTask = sql.includes("occupation_tasks");
       return {
         bind(...args: unknown[]) {
           const key = String(args[0] ?? "");
           return {
-            first: async () => rows.get(key) ?? null,
+            first: async () =>
+              (isTask ? tasks.get(key) : rows.get(key)) ?? null,
             run: async () => {
+              if (isTask) {
+                if (/^\s*DELETE/i.test(sql)) {
+                  tasks.delete(key);
+                  return { success: true };
+                }
+                tasks.set(key, {
+                  occupation: args[1],
+                  task_id: args[2],
+                  attempts: args[3],
+                  submitted_at: args[4],
+                });
+                return { success: true };
+              }
               const provider = String(args[2] ?? "");
               written.push({ key, provider });
               rows.set(key, {
@@ -71,7 +87,7 @@ function fakeOccupationDb(initial: Map<string, Record<string, unknown>> = new Ma
       };
     },
   } as unknown as D1Database;
-  return { db, written, rows };
+  return { db, written, rows, tasks };
 }
 
 function pngPayload(): string {
@@ -93,14 +109,18 @@ test("el pixel art es determinista y distinto por ocupación", () => {
   assert.notDeepEqual(new Uint8Array(doctor.bytes), new Uint8Array(judge.bytes));
 });
 
-test("el proveedor de imagen cae al mock por defecto", () => {
+test("el proveedor de imagen cae al mock sin ReAPI y usa reapi con su key", () => {
   assert.deepEqual(imageProvider({}), {
     provider: "mock",
-    model: "meta/muse-image",
+    model: "muse-image",
+  });
+  assert.deepEqual(imageProvider({ REAPI_KEY: "test" }), {
+    provider: "reapi",
+    model: "muse-image",
   });
   assert.deepEqual(imageProvider({ IMAGE_PROVIDER: "openrouter" }), {
     provider: "openrouter",
-    model: "meta/muse-image",
+    model: "muse-image",
   });
 });
 
@@ -285,13 +305,132 @@ test("generateOccupationImage no reintenta el modelo", async () => {
 test("el prompt de pixel art es detallado y nombra la ocupación", () => {
   const prompt = occupationImagePrompt("Médico");
   assert.match(prompt, /Médico/);
-  assert.match(prompt, /24 by 24/);
+  assert.match(prompt, /32-bit/);
+  assert.match(prompt, /hand-placed square pixels/i);
   assert.match(prompt, /#1C1C1E/);
   assert.match(prompt, /#EEF3EA/);
   assert.match(prompt, /#248A3D/);
   assert.match(prompt, /no photorealism/i);
   assert.match(prompt, /no letters/i);
-  assert.ok(prompt.length > 400);
+  assert.ok(prompt.length > 600);
+});
+
+test("ReAPI guarda la imagen y borra la tarea al completar", async () => {
+  const { db, rows, tasks } = fakeOccupationDb();
+  const calls: string[] = [];
+  let polls = 0;
+
+  await withFetch(
+    async (input) => {
+      calls.push(input);
+      if (input.endsWith("/images/generations")) {
+        return json({ id: "task_1", status: "processing" });
+      }
+      if (input.includes("/tasks/task_1")) {
+        polls += 1;
+        if (polls === 1) return json({ status: "processing" });
+        return json({
+          status: "completed",
+          output: { image_urls: ["https://cdn.reapi.ai/img.webp"] },
+        });
+      }
+      if (input === "https://cdn.reapi.ai/img.webp") {
+        return new Response(new Uint8Array(512).fill(7), {
+          status: 200,
+          headers: { "Content-Type": "image/webp" },
+        });
+      }
+      return json({}, 404);
+    },
+    async () => {
+      const image = await generateOccupationImageIfMissing(
+        db,
+        { IMAGE_PROVIDER: "reapi", REAPI_KEY: "test" },
+        "Abogado",
+      );
+      assert.ok(image);
+      assert.equal(image?.mime, "image/webp");
+      assert.equal(rows.get("abogado")?.provider, "reapi");
+      assert.equal(rows.get("abogado")?.model, "muse-image");
+      assert.equal(tasks.size, 0);
+      assert.equal(
+        calls.filter((url) => url.endsWith("/images/generations")).length,
+        1,
+      );
+    },
+  );
+});
+
+test("ReAPI hace como máximo un reintento y guarda persona", async () => {
+  const { db, rows } = fakeOccupationDb();
+  const submissions: string[] = [];
+
+  await withFetch(
+    async (input) => {
+      if (input.endsWith("/images/generations")) {
+        submissions.push(input);
+        return json({ id: `task_${submissions.length}` });
+      }
+      if (input.includes("/tasks/")) {
+        return json({ status: "failed", error: { code: 80007 } });
+      }
+      return json({}, 404);
+    },
+    async () => {
+      const image = await generateOccupationImageIfMissing(
+        db,
+        { IMAGE_PROVIDER: "reapi", REAPI_KEY: "test" },
+        "Fiscal",
+      );
+      assert.equal(image, null);
+      assert.equal(submissions.length, 2);
+      assert.equal(rows.get("fiscal")?.provider, "placeholder");
+    },
+  );
+});
+
+test("ReAPI reanuda una tarea guardada sin enviar otra imagen", async () => {
+  const { db, rows, tasks } = fakeOccupationDb();
+  tasks.set("juez", {
+    occupation: "Juez",
+    task_id: "task_saved",
+    attempts: 1,
+    submitted_at: Date.now(),
+  });
+  let submissions = 0;
+
+  await withFetch(
+    async (input) => {
+      if (input.endsWith("/images/generations")) {
+        submissions += 1;
+        return json({ id: "task_new" });
+      }
+      if (input.includes("/tasks/task_saved")) {
+        return json({
+          status: "completed",
+          output: { image_urls: ["https://cdn.reapi.ai/juez.webp"] },
+        });
+      }
+      if (input === "https://cdn.reapi.ai/juez.webp") {
+        return new Response(new Uint8Array(512).fill(9), {
+          status: 200,
+          headers: { "Content-Type": "image/webp" },
+        });
+      }
+      return json({}, 404);
+    },
+    async () => {
+      const image = await generateOccupationImageIfMissing(
+        db,
+        { IMAGE_PROVIDER: "reapi", REAPI_KEY: "test" },
+        "Juez",
+      );
+      assert.ok(image);
+      assert.equal(submissions, 0);
+      assert.equal(rows.get("juez")?.provider, "reapi");
+      assert.equal(tasks.size, 0);
+    },
+  );
 });
 
 test("solo se encolan ocupaciones de personas", () => {

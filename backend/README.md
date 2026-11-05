@@ -214,6 +214,17 @@ falls back to a `LIKE` search.
 Images never block identity or connections. `GET /occupation-image` answers
 immediately from cache and only generates when nothing is stored.
 
+- Generation uses **reAPI** (`https://reapi.ai/api/v1`) with `muse-image`.
+  The prompt asks for detailed 32-bit pixel art: hand-placed square pixels,
+  1:1, limited palette (`#1C1C1E` ink, `#EEF3EA` mint, `#248A3D` green), no
+  anti-aliasing, no photorealism, no text or logos.
+- reAPI is asynchronous: POST returns a task id, then the backend polls
+  `GET /tasks/{id}`, downloads the WebP and stores the bytes in
+  `occupation_images`. The task id also lives in `occupation_tasks`, so a later
+  request resumes the same task instead of submitting (and paying) again.
+- There are at most two submissions per occupation: the initial one and a
+  single retry. After that the `persona` placeholder is saved under that key
+  and the model is not called again.
 - Two placeholders live in `occupation_images`: `persona` (generic portrait)
   and `empresa` (building). Companies and agencies never receive a generated
   portrait.
@@ -221,12 +232,8 @@ immediately from cache and only generates when nothing is stored.
   roles; the endpoint reuses the first role already cached. Only when nothing
   matches does it generate the primary role and store it under that key, so
   other investigations can reuse it.
-- The pixel art prompt lives in `occupationImage.ts`
-  (`occupationImagePrompt`): 24×24 grid, ink/mint/green palette, frontal bust,
-  no photorealism, no text.
-- `IMAGE_PROVIDER=mock` renders a deterministic local SVG. `openrouter` and
-  `nvidia` make a single `/images/generations` call; on failure the cached
-  image or placeholder is served.
+- `IMAGE_PROVIDER=mock` renders the local deterministic SVG instead (no
+  network, no credits). `openrouter` and `nvidia` are legacy image paths.
 
 ## CORS
 
@@ -259,18 +266,24 @@ Each item carries `title` and `url`. Wikidata adds `id` (QID), `snippet` and
 
 ### `callOpenRouter`
 
-`callOpenRouter(env, messages, options?)` calls OpenRouter and tries free text
-models. If `/models` responds it filters by `:free` with `text` output; else it
-uses a fallback list. It retries 429, 5xx, timeouts, network errors and empty
-replies before moving to the next model. When the shared `free-models-per-day`
-quota is gone, the OpenRouter key fails, or no model returns text, it falls
-back to NVIDIA NIM (`NVIDIA_BASE_URL`, default
-`https://integrate.api.nvidia.com/v1`) with `NVIDIA_MODEL` or, if missing,
-`nemotron-3.5-lightning` and then `bolt`. The result reports which provider
-served the call; attempts are listed with provider, model and error code.
+`callOpenRouter(env, messages, options?)` tries models in this order:
 
-Returns `{ ok, text, model, usage?, attempts, error? }`. Never throws. A 401
-stops the walk; a 403 naming a specific model skips it.
+1. **NVIDIA NIM, Llama first.** The primary model is
+   `meta/llama-3.2-90b-vision-instruct`, the best Llama exposed by the free
+   NVIDIA account (the larger Nemotron Ultra/70B ids return 404 there).
+   `NVIDIA_MODEL`, when set and Llama-based, is tried before it.
+2. **Other free NVIDIA models** (`nemotron-3.5-lightning`, then `bolt`).
+3. **OpenRouter free models**, filtered to text LLMs only: embeddings,
+   rerankers, guards, speech and image models are excluded, and a reply
+   without text is skipped.
+
+On OpenRouter, if `/models` responds it filters by `:free` and `text` output;
+else it uses a fallback list. It retries 429, 5xx, timeouts, network errors and
+empty replies before moving to the next model. The result reports which
+provider served the call; attempts are listed with provider, model and error
+code. A 401 stops that provider; a 403 naming a specific model skips it.
+
+Returns `{ ok, text, model, usage?, attempts, error? }`. Never throws.
 
 Options: `models`, `temperature`, `maxTokens`, `timeoutMs`, `retries`,
 `retryDelayMs`.
@@ -293,12 +306,14 @@ Options: `models`, `temperature`, `maxTokens`, `timeoutMs`, `retries`,
 | `OPENROUTER_MODELS` | Comma-separated list; replaces discovery. | Empty. |
 | `OPENROUTER_SITE_URL` | `HTTP-Referer` for OpenRouter. | Empty. |
 | `OPENROUTER_APP_NAME` | `X-Title` for OpenRouter. | Empty. |
-| `NVIDIA_API_KEY` | NVIDIA NIM key, OpenRouter fallback. | Empty: no fallback. |
+| `NVIDIA_API_KEY` | NVIDIA NIM key. Primary model chain (Llama first). | Empty: no NVIDIA path. |
 | `NVIDIA_BASE_URL` | NVIDIA NIM base. | `https://integrate.api.nvidia.com/v1`. |
-| `NVIDIA_MODEL` | Preferred NVIDIA model. | Empty. |
-| `DB` | D1 binding for the shared store and images. | Set in `wrangler.jsonc`. |
-| `IMAGE_PROVIDER` | `mock`, `openrouter` or `nvidia`. | `mock`. |
-| `IMAGE_MODEL` | Image model. | `meta/muse-image`. |
+| `NVIDIA_MODEL` | Preferred NVIDIA model; Llama ids go first. | Empty: Llama 3.2 90B. |
+| `REAPI_KEY` | reAPI key for `muse-image`. | Empty: falls back to `mock` unless `IMAGE_PROVIDER` is set. |
+| `REAPI_BASE_URL` | reAPI base. | `https://reapi.ai/api/v1`. |
+| `DB` | D1 binding for the shared store, image cache and tasks. | Set in `wrangler.jsonc`. |
+| `IMAGE_PROVIDER` | `reapi`, `mock` or legacy `openrouter`/`nvidia`. | `reapi` when `REAPI_KEY` exists, else `mock`. |
+| `IMAGE_MODEL` | Image model. | `muse-image`. |
 | `GT_DATA_URL` | Unused. The GT data channel is inactive. | Empty. |
 
 Copy `.dev.vars.example` to `.dev.vars` for local development. `.dev.vars` is
@@ -308,11 +323,12 @@ the dashboard; public vars belong in `wrangler.jsonc`.
 
 ## D1
 
-D1 is wired with binding `DB` (database `consta`) and migrations
+D1 is wired with binding `DB` (database `consta`) and these migrations:
 `backend/migrations/0001_identity_analysis.sql` (analyses, entities, claims,
-FTS5, occupation images) and `0002_occupation_placeholders.sql` (`persona`,
-`empresa` keys). Locally `wrangler dev` stores data in `.wrangler/`. Before
-serving production traffic, run the migrations with `--remote`.
+FTS5, occupation images), `0002_occupation_placeholders.sql` (`persona`,
+`empresa` keys) and `0003_occupation_tasks.sql` (resumable ReAPI tasks).
+Locally `wrangler dev` stores data in `.wrangler/`. Before serving production
+traffic, run the migrations with `--remote`.
 
 The shared store holds names and claims of investigated people. It has no
 auth, deletion or viewer yet; a delete endpoint and a privacy note should land
@@ -330,6 +346,7 @@ backend/
   migrations/
     0001_identity_analysis.sql        # analyses, claims, FTS5, occupation images
     0002_occupation_placeholders.sql  # persona and empresa keys
+    0003_occupation_tasks.sql         # resumable ReAPI image tasks
   scripts/
     secret-bulk.mjs                   # wrangler secret put wrapper
   src/

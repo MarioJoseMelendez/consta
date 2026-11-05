@@ -9,8 +9,8 @@
   },
   "vars": {
     "ENVIRONMENT": "demo",
-    "IMAGE_PROVIDER": "mock",
-    "IMAGE_MODEL": "meta/muse-image",
+    "IMAGE_PROVIDER": "reapi",
+    "IMAGE_MODEL": "muse-image",
     "CORS_ORIGINS": "https://consta.kahuna.li",
     "GT_DATA_URL": "https://consta-gt-data.izzodstudios.workers.dev"
   },

@@ -6,6 +6,8 @@ Consta is a research tool that maps the people and companies around a subject
 from public records, with cited evidence and an explicit separation between
 corroborated facts, probable claims and absences.
 
+Live demo: **https://consta.kahuna.li**
+
 The product today is the **identity workspace**: you type a name, the backend
 plans searches across public sources (Tavily, Wikidata) plus a shared store of
 earlier investigations (`bd`), resolves the subject into a candidate profile,
@@ -34,6 +36,8 @@ Browser → backend (consta-api)
 
 - `backend` is the only live service. It never exposes provider keys to the
   browser; the frontend only talks to the Worker.
+- Models: Llama 3.2 90B on NVIDIA is the primary model; then other free NVIDIA
+  models; then free OpenRouter models, restricted to text LLMs.
 - `bd` is a tool the model may choose — not a source. It returns saved claims
   with their corroboration level and original sources, and the backend expands
   those references when citing them.
@@ -88,11 +92,15 @@ Details: [`frontend/README.md`](frontend/README.md).
 - `POST /identity/analysis` is idempotent per content hash: retrying the same
   investigation updates the row instead of duplicating it. Claims without
   sources are not saved.
-- Occupation portraits are deterministic pixel art (SVG, 24×24) cached in D1.
-  Compound occupations ("Doctor, politician and entrepreneur") reuse the first
-  role already stored; only when nothing matches does the backend generate and
-  save the primary role. Provider is switchable via `IMAGE_PROVIDER`
-  (`mock` locally, `openrouter` or `nvidia` in production).
+- Occupation portraits are pixel art generated with reAPI's `muse-image` and
+  cached in D1. The prompt asks for detailed 32-bit pixel art with hand-placed
+  square pixels, a limited palette and no aliasing. Compound occupations
+  ("Doctor, politician and entrepreneur") reuse the first role already stored;
+  only when nothing matches does the backend submit a generation for the
+  primary role. The task id is persisted, so a later request resumes the same
+  task instead of paying for a second image; there is one retry at most. Set
+  `REAPI_KEY` and keep `IMAGE_PROVIDER=reapi`, `IMAGE_MODEL=muse-image`;
+  `IMAGE_PROVIDER=mock` renders the local deterministic SVG.
 
 ## Deploy
 
