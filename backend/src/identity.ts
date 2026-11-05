@@ -97,7 +97,7 @@ const MAX_PLAN_QUERIES = 5;
 const MAX_CANDIDATES = 5;
 const SEARCH_LIMIT = 5;
 const SEARCH_TIMEOUT_MS = 12_000;
-const MODEL_TIMEOUT_MS = 45_000;
+const MODEL_TIMEOUT_MS = 20_000;
 const PLAN_MAX_TOKENS = 900;
 const ROUND_MAX_TOKENS = 4_500;
 /**
@@ -473,8 +473,10 @@ function modelCallOptions(env: GeneralEnv, maxTokens: number) {
     temperature: 0.1,
     maxTokens,
     timeoutMs: MODEL_TIMEOUT_MS,
-    retries: 1,
-    retryDelayMs: 600,
+    // El circuit breaker de callOpenRouter ya salta un modelo que acaba de
+    // fallar; reintentarlo aquí solo alarga la investigación.
+    retries: 0,
+    retryDelayMs: 0,
   };
 }
 

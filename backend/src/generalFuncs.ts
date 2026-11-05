@@ -459,6 +459,39 @@ interface FreeTextModelCache {
 
 let freeTextModelCache: FreeTextModelCache | null = null;
 
+/**
+ * Un modelo que acaba de agotar el tiempo o devolver 5xx se salta durante
+ * unos minutos. Sin esto, un Llama lento paga su timeout en cada llamada de
+ * la misma investigación y agota el tiempo que espera el cliente.
+ */
+const MODEL_UNHEALTHY_TTL_MS = 5 * 60 * 1000;
+const unhealthyModels = new Map<string, number>();
+
+function modelHealthKey(provider: string, model: string): string {
+  return `${provider}:${model}`;
+}
+
+function isModelUnhealthy(provider: string, model: string): boolean {
+  const key = modelHealthKey(provider, model);
+  const until = unhealthyModels.get(key);
+  if (until === undefined) return false;
+  if (until > Date.now()) return true;
+  unhealthyModels.delete(key);
+  return false;
+}
+
+function markModelUnhealthy(provider: string, model: string): void {
+  unhealthyModels.set(
+    modelHealthKey(provider, model),
+    Date.now() + MODEL_UNHEALTHY_TTL_MS,
+  );
+}
+
+/** Solo para pruebas: olvida el estado de salud de los modelos. */
+export function resetModelHealth(): void {
+  unhealthyModels.clear();
+}
+
 async function discoverFreeTextModels(
   env: GeneralEnv,
   timeoutMs: number,
@@ -1049,12 +1082,24 @@ export async function callOpenRouter(
 
   let lastError: GeneralError | undefined;
   let nvidiaKeyRejected = false;
+  // Si al menos un modelo sigue sano, los que acaban de fallar se saltan.
+  // Si todos están marcados, se vuelve a probar para no quedarse sin cadena.
+  const skipUnhealthy =
+    providers.reduce(
+      (total, provider) =>
+        total +
+        provider.models.filter(
+          (model) => !isModelUnhealthy(provider.provider, model),
+        ).length,
+      0,
+    ) > 0;
 
   for (const provider of providers) {
     if (provider.provider === "nvidia" && nvidiaKeyRejected) continue;
     let stopProvider = false;
 
     for (const model of provider.models) {
+      if (skipUnhealthy && isModelUnhealthy(provider.provider, model)) continue;
       for (let attempt = 0; attempt <= retries; attempt++) {
         const response = await fetchJson(
           provider.url.toString(),
@@ -1084,6 +1129,17 @@ export async function callOpenRouter(
             message: error.message,
           });
           if (!lastError?.retryable || error.retryable) lastError = error;
+
+          // Timeout, red o 5xx: el modelo no está sano ahora mismo. Se pasa al
+          // siguiente sin gastar otro timeout completo en el mismo id.
+          if (
+            error.code === "timeout" ||
+            error.code === "network_error" ||
+            (error.status !== undefined && error.status >= 500)
+          ) {
+            markModelUnhealthy(provider.provider, model);
+            break;
+          }
 
           // La cuota diaria la comparten todos los free: no insistas con el
           // siguiente modelo y pasa al proveedor de respaldo.

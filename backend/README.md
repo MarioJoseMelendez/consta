@@ -281,7 +281,9 @@ On OpenRouter, if `/models` responds it filters by `:free` and `text` output;
 else it uses a fallback list. It retries 429, 5xx, timeouts, network errors and
 empty replies before moving to the next model. The result reports which
 provider served the call; attempts are listed with provider, model and error
-code. A 401 stops that provider; a 403 naming a specific model skips it.
+code. A 401 stops that provider; a 403 naming a specific model skips it. A
+model that times out or returns 5xx is skipped for five minutes, so a slow
+primary does not pay its timeout on every call of the same investigation.
 
 Returns `{ ok, text, model, usage?, attempts, error? }`. Never throws.
 

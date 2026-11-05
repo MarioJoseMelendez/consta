@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { callOpenRouter } from "../src/generalFuncs.ts";
+import { callOpenRouter, resetModelHealth } from "../src/generalFuncs.ts";
 
 type Handler = (input: string, init?: RequestInit) => Response;
 
@@ -32,6 +32,10 @@ function json(body: unknown, status = 200): Response {
 }
 
 const messages = [{ role: "user" as const, content: "Devuelve JSON." }];
+
+test.beforeEach(() => {
+  resetModelHealth();
+});
 
 test("si NVIDIA falla, OpenRouter atiende y la cuota diaria corta la cadena", async () => {
   await withFetch(
@@ -138,6 +142,41 @@ test("sin NVIDIA, la cuota diaria explica cómo configurar el respaldo", async (
       assert.equal(result.ok, false);
       assert.equal(result.error?.code, "rate_limited");
       assert.match(result.error?.message ?? "", /NVIDIA_API_KEY/);
+    },
+  );
+});
+
+test("un timeout del primario no se repite en la siguiente llamada", async () => {
+  let primaryCalls = 0;
+  let fallbackCalls = 0;
+
+  await withFetch(
+    (input, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { model?: string };
+      if (body.model === "meta/llama-3.2-90b-vision-instruct") {
+        primaryCalls += 1;
+        return Promise.reject(
+          Object.assign(new Error("aborted"), { name: "AbortError" }),
+        ) as unknown as Response;
+      }
+      fallbackCalls += 1;
+      return json({ choices: [{ message: { content: "desde el respaldo" } }] });
+    },
+    async () => {
+      const options = {
+        models: ["modelo-a:free"],
+        timeoutMs: 50,
+        retries: 0,
+      };
+      const first = await callOpenRouter({ NVIDIA_API_KEY: "test" }, messages, options);
+      assert.equal(first.ok, true);
+      assert.equal(first.model, "nvidia/nemotron-3.5-lightning-30b-a3b");
+
+      const second = await callOpenRouter({ NVIDIA_API_KEY: "test" }, messages, options);
+      assert.equal(second.ok, true);
+      // El primario quedó marcado: la segunda llamada va directa al respaldo.
+      assert.equal(primaryCalls, 1);
+      assert.equal(fallbackCalls, 2);
     },
   );
 });
