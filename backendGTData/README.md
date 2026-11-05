@@ -1,5 +1,9 @@
 # @consta/gt-data
 
+> **INACTIVE.** This package is not part of the live product right now. The
+> backend no longer depends on the GT data channel; the code and docs below are
+> kept for reference only.
+
 Channel de Guatemala para Consta. Expone `channel/v1` y las tools de entidades,
 relaciones, evidencia y documentos desde Cloudflare Workers + Hono.
 

@@ -1,194 +1,158 @@
 # Consta — frontend
 
-Interfaz editorial para investigación de registros públicos con enfoque
-Guatemala. Cruza identidades, vínculos, claims y evidencia, manteniendo visible
-la fuente y la licencia de cada dato.
+Editorial interface for Consta's identity research. The workspace shows the
+investigated subject, the web of claims around them and every source, keeping
+corroboration explicit.
 
-> **Estado:** demo navegable. Las entidades, relaciones, montos y canales que se
-> muestran por defecto son ficticios. No describen personas, empresas ni
-> contratos reales. La etiqueta **DEMO** aparece en las vistas que usan el bundle
-> local.
+> **Demo note.** The default workspace entities (the old GT demo) are
+> fictitious and marked with a **DEMO** tag. The identity screen
+> (`/workspace`) talks to the real backend.
 
 ## Stack
 
 - Next.js 16 (App Router) + React 19 + TypeScript.
-- Export estático (`output: "export"`) para Cloudflare Pages.
-- CSS propio en `app/globals.css`; sin Tailwind, UI kits, íconos externos ni
-  librerías de gráficos.
-- `@consta/contracts` como fuente de tipos y datos demo del workspace.
+- Static export (`output: "export"`) for Cloudflare Pages.
+- Hand-written CSS in `app/globals.css`; no Tailwind, UI kits, icon sets or
+  chart libraries.
+- `@consta/contracts` for shared types.
 
-## Requisitos
+## Requirements
 
 - Node.js >= 20.9.
-- pnpm, trabajando desde el monorepo de Consta.
-- Dependencias instaladas desde la raíz del repositorio. El paquete declara
-  `@consta/contracts` como dependencia de workspace.
+- pnpm, working from the Consta monorepo (install from the repo root).
 
-## Comandos
+## Commands
 
-Desde `frontend/`:
+From `frontend/`:
 
 ```bash
-pnpm dev        # servidor de desarrollo
-pnpm build      # build estático; genera out/
-pnpm typecheck  # verificación de tipos
+pnpm dev        # dev server (pass --port 3001 to match CORS setups that need it)
+pnpm build      # static build; generates out/
+pnpm typecheck  # type check
+pnpm test       # connectionTable + occupationImage tests
 ```
 
-Para revisar el build exportado localmente:
+To preview the exported build locally:
 
 ```bash
 npx serve out
 ```
 
-No hay servidor Next en producción: el resultado es una carpeta de archivos
-estáticos.
+There is no Next server in production: the result is a folder of static files.
 
-## Rutas
+## Routes
 
-| Ruta | Contenido |
+| Route | Content |
 | --- | --- |
-| `/` | Landing editorial: propuesta, caso demo, cobertura, método y manifiesto. |
-| `/workspace` | Buscador, resultados, expediente, grafo, claims, pasos y evidencia. Acepta `?q=` y `?id=`. |
-| `/channels` | Registro de canales con licencia, `commercial_ok`, estado, última sincronización, filas y capacidades. |
-| `404` | Página de error con salida al inicio o al caso demo. |
+| `/` | Editorial landing. |
+| `/workspace` | Identity research: form, candidate cards, claims web, connection threads, evidence. Accepts `?q=` and `?id=`. |
+| `/channels` | Legacy demo channel registry (fictitious data). |
+| `404` | Error page. |
 
-### Estado en la URL del workspace
+## Identity workspace flow
 
-- `?q=Nexo` ejecuta una búsqueda local y actualiza la lista de resultados.
-- `?id=gt-nit%3A90000017` abre directamente un expediente demo.
-- Al seleccionar un nodo o un resultado se hace `router.replace` con `id`,
-  preservando `q`. Así se puede compartir o recargar la selección.
+1. The form posts to `POST /identity/investigate` (`NEXT_PUBLIC_API_URL` base)
+   with name, details and interest. The plan streams first; rounds and
+   candidates follow.
+2. Confirming a candidate starts the connection loop:
+   `POST /identity/connections` runs one turn per request and the frontend
+   chains turns while `canContinue` is `true`. Clicking a branch deepens that
+   specific entity via `branchContext`.
+3. When the loop finishes (or a branch is saved), the frontend posts the whole
+   investigation to `POST /identity/analysis`, which persists it to the shared
+   store. Retrying the same investigation is idempotent.
+4. Claims reused from the shared store are marked with a small **BD** badge;
+   their evidence links point to the original sources the backend expanded.
+5. Photo boxes show occupation pixel art from `GET /occupation-image`; if
+   there is no occupation or the image fails, initials are rendered instead.
 
-## Flujo de datos
+## API
 
-1. La landing y `/channels` leen el manifiesto y los canales demo de
-   `@consta/contracts`.
-2. El workspace arranca con resultados demo (`searchDemoEntities`), para que la
-   interfaz sea navegable sin backend.
-3. En paralelo intenta consultar la API local con timeout corto
-   (1.6 s por petición). Si la respuesta tiene la forma esperada, usa los datos
-   vivos y muestra **API local**; si no, conserva el fallback demo.
-4. El expediente se compone con la entidad, sus relaciones, evidencia, claims y
-   pasos del run. Si la API no devuelve un run, el cliente deriva claims y grafo
-   desde el bundle.
-5. La selección de nodos en el SVG, la lista de vínculos y el rail de resultados
-   comparten el mismo `selectedId`.
+`NEXT_PUBLIC_API_URL` defines the base. Default: `http://localhost:8787`.
 
-### API esperada
-
-`NEXT_PUBLIC_API_URL` define la base. Valor por defecto:
-`http://localhost:8787`.
-
-El cliente prueba variantes de ruta para tolerar backends en distintas etapas:
-
-| Operación | Rutas probadas |
+| Operation | Route |
 | --- | --- |
-| Búsqueda | `GET /search?q=`, `/v1/search?q=`, `/api/search?q=` |
-| Entidad | `GET /entities/:id`, `/entity/:id`, `/v1/entities/:id`, `/v1/entity/:id` |
-| Análisis | `POST /analyze`, `/v1/analyze`, `/api/analyze` con `{ "entityId": "...", "depth": 1 }` |
+| Investigate | `POST /identity/investigate` |
+| More searches | `POST /identity/more` |
+| Connection turn | `POST /identity/connections` |
+| Save analysis | `POST /identity/analysis` |
+| Occupation image | `GET /occupation-image?name=...` |
+| Legacy demo search / entity / analyze | `GET /search?q=`, `GET /entities/:id`, `POST /analyze` |
 
-Formas aceptadas:
+The backend must allow CORS from the frontend origin. Because it is
+`NEXT_PUBLIC_*`, the URL is baked at build time.
 
-- Búsqueda: un array de ítems o `{ "items": [...] }`, eventualmente envuelto en
-  `data`, `result` o `search`. Cada ítem necesita al menos `id` y `title`.
-- Entidad: un bundle con `entity`, `relationships` y `evidence`, eventualmente
-  envuelto en `data`, `result` o `bundle`.
-- Análisis: un run con `steps`, `claims` y, opcionalmente, `graph`. Si no hay
-  `graph`, se construye a partir de las relaciones.
+## Environment variables
 
-El backend debe permitir CORS desde el dominio del frontend. Al ser
-`NEXT_PUBLIC_*`, la URL se incorpora en tiempo de build.
-
-## Variables de entorno
-
-Copiar `.env.example` a `.env.local` si se quiere apuntar a otra API:
+Copy `.env.example` to `.env.local` to point somewhere else:
 
 ```bash
-NEXT_PUBLIC_API_URL=https://api.example.org
+NEXT_PUBLIC_API_URL=https://consta-api.example.workers.dev
 ```
 
-Sin variable, el cliente usa `http://localhost:8787` y cae al modo demo cuando
-no hay respuesta válida.
+Without the variable the client uses `http://localhost:8787`.
 
-## Deploy en Cloudflare Pages
+## Deploy on Cloudflare Pages
 
-El proyecto genera archivos estáticos en `frontend/out`.
+Suggested settings for the monorepo:
 
-Configuración recomendada para el monorepo:
-
-- **Root directory:** raíz del repositorio.
+- **Root directory:** repo root.
 - **Build command:** `pnpm --filter @consta/frontend build`
 - **Build output directory:** `frontend/out`
-- **Node version:** 20.9 o superior.
-- **Environment variable:** `NEXT_PUBLIC_API_URL` con la URL HTTPS del backend.
+- **Node version:** 20.9 or higher.
+- **Environment variable:** `NEXT_PUBLIC_API_URL` with the Worker's HTTPS URL.
 
-Notas:
+Notes:
 
-- No se usa servidor Next, ISR ni rutas dinámicas del servidor.
-- `trailingSlash: true` publica `/workspace/`, `/channels/` y el `404.html`
-  generado.
-- Las imágenes están sin optimización (`images.unoptimized`), porque no hay
-  runtime de Next.
-- Si se sirve el frontend desde otro dominio, la API debe aceptar CORS.
+- No Next server, ISR or dynamic server routes.
+- `trailingSlash: true` publishes `/workspace/` and the generated `404.html`.
+- Images are unoptimized (`images.unoptimized`) because there is no Next
+  runtime.
 
-## Sistema visual
+## Visual system
 
-- Tinta `#0b0f0e`, papel `#f3efe4`, lima `#d8ff3e`, naranja `#ff6b3d`.
-- Tipografía display serif, texto de sistema, metadatos monoespaciados.
-- Bordes finos, retícula de fondo, tarjetas de papel y composición tipo
-  expediente.
-- Breakpoints en `app/globals.css`: 1400, 1180, 1100, 980, 900, 820, 760, 620,
-  520, 460 y 380 px.
-- El grafo SVG cambia a disposición radial compacta por debajo de 760 px y
-  respeta `prefers-reduced-motion`.
-- La tabla de canales se convierte en tarjetas apiladas en pantallas pequeñas.
+- Ink `#0b0f0e`, paper `#f3efe4`, lime `#d8ff3e`, orange `#ff6b3d`.
+- Serif display type, system text, monospaced metadata.
+- Thin borders, background grid, paper cards, dossier-like composition.
+- Breakpoints live in `app/globals.css`; the claims web adapts to narrow
+  screens and everything respects `prefers-reduced-motion`.
 
-## Accesibilidad
+## Accessibility
 
-- Enlace de salto al contenido, landmarks y jerarquía de encabezados.
-- Navegación por teclado en el grafo (`Enter`/`Espacio` sobre nodos) y foco
-  visible.
-- Estados de identidad y canal no dependen solo del color: llevan etiqueta.
-- El botón de búsqueda conserva nombre accesible cuando se oculta su texto en
-  móvil.
-- La tabla de canales mantiene semántica de tabla; las etiquetas visuales de las
-  tarjetas se generan con `data-label`.
+- Skip link, landmarks and heading hierarchy.
+- Keyboard navigation on graphs (Enter/Space over nodes) with visible focus.
+- Identity and confidence states never rely on color alone: they carry labels.
+- The search button keeps an accessible name when its text is hidden on mobile.
 
-## Estructura
+## Structure
 
 ```text
 frontend/
 ├─ app/
-│  ├─ channels/page.tsx      # registro de canales
-│  ├─ workspace/page.tsx     # Suspense + metadata
-│  ├─ not-found.tsx
-│  ├─ layout.tsx
-│  ├─ globals.css
-│  └─ page.tsx               # landing
+│  ├─ workspace/page.tsx     # identity research screen
+│  ├─ channels/page.tsx      # legacy demo registry
+│  ├─ layout.tsx, globals.css, page.tsx (landing), not-found.tsx
 ├─ components/
+│  ├─ identity/              # IdentityProvider, IdentityPanel, IdentityProfile,
+│  │                         # ClaimsWeb, IdentityForm, connectionTable
 │  ├─ workspace/Workspace.tsx
-│  ├─ ChannelsRegistry.tsx
-│  ├─ Graph.tsx
-│  ├─ Dossier.tsx
-│  ├─ EvidenceList.tsx
-│  └─ ...
+│  └─ ...                    # Graph, Dossier, EvidenceList, Header, etc.
 ├─ lib/
-│  ├─ api.ts                 # cliente, timeout y fallback
-│  ├─ model.ts               # vista, grafo y claims derivados
+│  ├─ api.ts                 # client, timeouts, fallback
+│  ├─ identity.ts            # identity client: investigate, connections, save,
+│  │                         # occupation image URL
+│  ├─ model.ts               # demo view, graph and derived claims
 │  └─ format.ts
+├─ test/                     # node --test suites
 ├─ public/favicon.svg
 ├─ next.config.ts
 └─ README.md
 ```
 
-## Límites conocidos
+## Known limits
 
-- No hay autenticación, persistencia, ingesta ni jobs de análisis en este
-  paquete; eso vive en el backend.
-- La búsqueda demo es un subconjunto ficticio de cinco entidades.
-- El filtro **Solo commercial_ok** es de cliente y opera sobre el snapshot
-  `demoChannels`.
-- Los enlaces de evidencia apuntan a datasets de origen, no a una fila única
-  inexistente.
-- Las licencias mostradas son parte del contrato de canal; no sustituyen una
-  revisión legal.
+- No authentication and no server-side persistence in this package; the
+  shared store lives behind the backend.
+- The legacy demo search is a fictitious five-entity subset.
+- Evidence links point to original sources; the backend drops any URL that did
+  not come from a real search.

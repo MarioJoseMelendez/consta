@@ -1,488 +1,324 @@
 # Consta API (`@consta/backend`)
 
-API HTTP de Consta para investigación de registros públicos, construida con
-TypeScript, [Hono](https://hono.dev/) y Cloudflare Workers.
+HTTP API for Consta's identity research, built with TypeScript,
+[Hono](https://hono.dev/) and Cloudflare Workers.
 
-> **Modo demo.** Las entidades, relaciones, evidencias y análisis que devuelven
-> las rutas de expediente son ficticios. No representan empresas ni personas
-> reales. El manifiesto declara el modo demo y esas respuestas incluyen la
-> cabecera `X-Consta-Demo: true`.
->
-> `POST /identity/investigate` es distinto: busca en Tavily y Wikidata y no
-> envía `X-Consta-Demo`. Un campo sin URL de esas búsquedas queda en
-> `not_found`.
+> **Demo routes.** The entity, relationship, evidence and analysis routes that
+> power the old demo workspace return fictitious data and send the
+> `X-Consta-Demo: true` header. The identity routes
+> (`/identity/*`, `/occupation-image`) are different: they search real public
+> sources and never send that header.
 
 ## Stack
 
-- TypeScript (strict, sin emisión; Wrangler hace el bundle).
+- TypeScript (strict, no emit; Wrangler bundles).
 - Hono.
-- Cloudflare Workers + Wrangler.
-- Contratos compartidos desde `@consta/contracts` (tipos y datos demo).
+- Cloudflare Workers + Wrangler + D1.
+- Shared contracts from `@consta/contracts`.
 
-## Comandos
+## Commands
 
-Desde la raíz del repo:
+From the repo root:
 
 ```bash
-pnpm install          # instala el workspace
-pnpm dev:api          # API en http://localhost:8787
-pnpm typecheck        # tsc --noEmit en todos los paquetes
-pnpm build            # build de todos los paquetes
-pnpm deploy:api       # wrangler deploy (requiere sesión de Cloudflare)
+pnpm install          # install the workspace
+pnpm dev:api          # API on http://localhost:8787
+pnpm typecheck        # tsc --noEmit in every package
+pnpm build            # build every package
+pnpm deploy:api       # wrangler deploy (needs a Cloudflare session)
 ```
 
-Directo en el paquete:
+Inside the package:
 
 ```bash
-pnpm --filter @consta/backend dev
-pnpm --filter @consta/backend test
+pnpm --filter @consta/backend dev        # wrangler dev
+pnpm --filter @consta/backend test      # node --test
 pnpm --filter @consta/backend typecheck
-pnpm --filter @consta/backend build
+pnpm --filter @consta/backend build     # wrangler deploy --dry-run --outdir dist
 pnpm --filter @consta/backend deploy
+pnpm --filter @consta/backend run secrets  # node scripts/secret-bulk.mjs
 ```
 
-`test` ejecuta `node --test` con el runner nativo de Node sobre
-`backend/test/sourceScore.test.ts`. No requiere dependencias ni red: el loader
-`test/register.mjs` resuelve imports relativos sin extensión a `.ts` con
-`--experimental-strip-types`.
+`test` runs the native Node runner over `backend/test/*`. It needs no network:
+the `test/register.mjs` loader resolves extensionless relative imports to
+`.ts` via `--experimental-strip-types`. `wrangler dev` loads variables from
+`.dev.vars`; use `.dev.vars.example` as the template.
 
-`build` ejecuta `wrangler deploy --dry-run --outdir dist`, así que valida el
-bundle sin publicar. `wrangler dev` carga variables desde `.dev.vars`; usa
-`.dev.vars.example` como plantilla.
+## Routes
 
-## Rutas
-
-| Método | Ruta | Respuesta |
+| Method | Route | Response |
 | --- | --- | --- |
-| `GET` | `/` | Información del servicio y enlaces a `/manifest` y `/health`. |
-| `GET` | `/manifest` | Descriptor del analyzer (`contract: "analyzer/v1"`) con sus canales. |
+| `GET` | `/` | Service info and links to `/manifest` and `/health`. |
+| `GET` | `/manifest` | Analyzer descriptor (`contract: "analyzer/v1"`). |
 | `GET` | `/health` | `{ ok, service, environment, time }`. |
-| `GET` | `/tools/search_entities?q=` | `SearchResponse` con entidades demo. `q` es opcional; sin `q` devuelve una muestra. |
-| `GET` | `/search?q=` | Alias para el frontend; misma respuesta que `/tools/search_entities`. |
-| `GET` | `/tools/get_entity?id=` | `EntityBundle` (entidad, relaciones y evidencia). `404` si no existe. |
-| `GET` | `/entities/:id` | Alias para el frontend; mismo bundle que `/tools/get_entity`. |
-| `GET` | `/entity/:id` | Alias adicional del bundle. |
-| `GET` | `/tools/get_relationships?id=` | `{ entityId, relationships, evidence }` de la entidad. `404` si no existe. |
-| `GET` | `/tools/get_evidence?ids=a,b` | `{ items: Evidence[] }`. Sin `ids` devuelve toda la evidencia demo. |
-| `GET` | `/tools/get_document?id=` | Metadatos `{ id, title, url, license, content_type }` de una evidencia. `404` si no existe. |
-| `POST` | `/analyze` | `AnalysisRun` demo. Acepta `{ entityId?, query?, depth? }`. |
-| `POST` | `/identity/investigate` | Investigación de identidad. Acepta `{ name, details?, interest? }` y devuelve `{ plan, rounds, candidates }`. No lleva `X-Consta-Demo`. |
-| `POST` | `/identity/more` | Hasta dos búsquedas extra. Acepta `{ name, details?, interest?, investigation }` y busca NIT, teléfono, correo, representante legal, dirección y documento nacional. |
-| `POST` | `/identity/connections` | Una vuelta del loop de conexiones sobre un candidato confirmado. Acepta `{ name, details?, interest?, investigation, candidateId, connection?, branchContext }` y devuelve `{ claims, rounds, summary, canContinue, stoppedReason }`.
-| `POST` | `/identity/analysis` | Guarda o actualiza un análisis completo en D1. Acepta `{ name, details?, interest?, candidate?, connection }`; es idempotente por hash de contenido y devuelve `{ id, created, claims, entities }`. |
-| `GET` | `/occupation-image?name=` | Foto de ocupación o placeholder `persona`/`empresa`. `kind=person|enterprise` y `meta=1` para el estado. No bloquea identidad. |
+| `POST` | `/identity/investigate` | Identity investigation: `{ name, details?, interest? }` → `{ plan, rounds, candidates }`. |
+| `POST` | `/identity/more` | Up to two extra targeted searches over an existing investigation. |
+| `POST` | `/identity/connections` | One turn of the connection loop: `{ name, details?, interest?, investigation, candidateId, connection?, branchContext? }` → `{ claims, rounds, summary, canContinue, stoppedReason }`. |
+| `POST` | `/identity/analysis` | Persists an investigation to D1. Idempotent per content hash → `{ id, created, claims, entities }`. |
+| `GET` | `/occupation-image?name=` | Pixel art portrait for an occupation or the `persona`/`empresa` placeholder. `kind=person|enterprise`, `meta=1` for status. |
+| `GET` | `/tools/search_entities?q=` | `SearchResponse` with demo entities. |
+| `GET` | `/search?q=` | Frontend alias of `/tools/search_entities`. |
+| `GET` | `/entities/:id` (and `/entity/:id`, `/tools/get_entity?id=`) | Demo `EntityBundle`. `404` if missing. |
+| `GET` | `/tools/get_relationships?id=` | Demo relationships + evidence. |
+| `GET` | `/tools/get_evidence?ids=a,b` | `{ items: Evidence[] }`. |
+| `GET` | `/tools/get_document?id=` | Demo evidence metadata. No downloads. |
+| `POST` | `/analyze` | Demo analysis run over a demo entity. |
 
-### Ejemplos
+### Example
 
 ```bash
 curl "http://localhost:8787/health"
-curl "http://localhost:8787/manifest"
-curl "http://localhost:8787/tools/search_entities?q=nexo"
-curl "http://localhost:8787/tools/get_entity?id=gt-nit%3A90000017"
-curl "http://localhost:8787/tools/get_relationships?id=gt-nit%3A90000017"
-curl "http://localhost:8787/tools/get_evidence?ids=ev-rep-nexo,ev-ocds-nexo"
-curl "http://localhost:8787/tools/get_document?id=ev-ocds-nexo"
-
-curl -X POST "http://localhost:8787/analyze" \
-  -H "Content-Type: application/json" \
-  -d '{"entityId":"gt-nit:90000017","depth":2}'
 
 curl -X POST "http://localhost:8787/identity/investigate" \
   -H "Content-Type: application/json" \
-  -d '{"name":"Banco de Guatemala","details":"banco central","interest":"contratos y fondeo"}'
+  -d '{"name":"Sam Altman","details":"OpenAI","interest":"funding and politics"}'
 
 curl -X POST "http://localhost:8787/identity/connections" \
   -H "Content-Type: application/json" \
-  -d '{"name":"Banco de Guatemala","details":"banco central","investigation": {...}, "candidateId": "c1", "connection": {...}, "branchContext": {"entityId": "ent1", "claimId": "clm1", "label": "rama1"}}'
+  -d '{"name":"Sam Altman","investigation":{...},"candidateId":"c1","branchContext":{"entityId":"ent1","claimId":"clm1","label":"branch"}}'
 ```
 
-Validaciones relevantes:
+## Errors
 
-- `id`, `entityId` y cada valor de `ids` deben ser cadenas no vacías de hasta
-  200 caracteres.
-- `q` y `query` admiten hasta 200 caracteres.
-- `ids` acepta hasta 100 IDs separados por coma; se eliminan duplicados.
-- `depth` solo puede ser `1` o `2`.
-- `POST /analyze` exige `entityId` o `query`; si se envía `entityId`, debe
-  existir en los datos demo.
-- `get_document` y los endpoints de entidad devuelven `404` cuando el ID no
-  existe.
-
-`get_document` es una vista de metadatos: no descarga bytes. En demo,
-`content_type` se deriva del tipo de evidencia (`record` → `application/json`,
-`document` → `application/pdf`, `dataset` → `text/csv`).
-
-## Errores
-
-Todos los errores usan la forma `ApiError` del contrato:
+Every error uses the contract's `ApiError` shape:
 
 ```json
 {
   "error": {
     "code": "entity_not_found",
-    "message": "No existe una entidad demo con id \"gt-nit:000\"".
+    "message": "There is no demo entity with id \"gt-nit:000\"."
   }
 }
 ```
 
-Códigos usados: `missing_parameter`, `invalid_parameter`, `invalid_json`,
-`invalid_body`, `entity_not_found`, `document_not_found`, `not_found`,
-`invalid_plan`, `invalid_model_json`, `candidate_not_found` e `internal_error`
-(este último con `retryable: true`). La identidad también puede reenviar el
-código de Tavily u OpenRouter, por ejemplo `missing_api_key`.
+Codes: `missing_parameter`, `invalid_parameter`, `invalid_json`, `invalid_body`,
+`entity_not_found`, `document_not_found`, `not_found`, `invalid_plan`,
+`invalid_model_json`, `candidate_not_found`, `internal_error` (with
+`retryable: true`). Identity endpoints can also forward provider codes such as
+`missing_api_key`.
 
-## Identidad
+## Identity
 
-`POST /identity/investigate` resuelve candidatos a partir de un nombre, una
-descripción opcional y un interés de investigación opcional. El cuerpo es
-`{ "name": "...", "details": "...", "interest": "..." }`.
-`name` es obligatorio y admite hasta 200 caracteres. `details` admite hasta
-2000. `interest` admite hasta 1000: es el foco del periodista, no evidencia.
-Si falta, el loop de conexiones se enfoca en interés público (partidos,
-fondeo, empresas asociadas, apoyo externo).
+`POST /identity/investigate` resolves candidates from a name, an optional
+description (`details`, up to 2000 chars) and an optional research interest
+(`interest`, up to 1000 chars). The interest is the journalist's focus, not
+evidence; when it is missing the connection loop falls back to public interest
+(parties, funding, associated companies, external support).
 
-El backend hace, en este orden:
+The flow:
 
-1. Una llamada al modelo arma el plan. Esta llamada no cuenta como ronda. El
-   modelo recibe el diccionario de herramientas y el de los 15 campos. La
-   primera ola no busca NIT ni cargo: son dos consultas para saber si el
-   nombre es persona o empresa. Wikidata recibe el nombre exacto. Tavily
-   recibe el mismo nombre en noticieros.
+1. **Plan.** One model call builds the search plan (it does not count as a
+   round). The model gets the tool dictionary — `wikidata`, `tavily` and `bd` —
+   and the 15 field definitions. The first wave only tries to tell whether the
+   name is a person or a company.
+2. **Rounds.** Up to three rounds. Each query runs on the chosen tool only; an
+   unknown tool runs on both. Once the type is known, person queries go to news
+   (occupation, aliases, date of birth, nationality) and company queries to
+   public records (tax ID, legal name, address, site, phone, representative,
+   incorporation).
+3. **Candidates.** The model updates the candidates from the numbered search
+   results. If it returns none but the searches did name the subject, the
+   response synthesizes one candidate per Wikidata hit (or from Tavily pages
+   that cite the name). Remaining fields stay `not_found`.
 
-2. Hasta tres rondas. Cada query se busca solo en la herramienta elegida. Si
-   la herramienta falta o no es `wikidata` ni `tavily`, esa query se busca en
-   ambas y no se descarta. Si el tipo ya es persona, las consultas siguientes
-   van a noticieros (cargo, alias, nacimiento, nacionalidad) y el DPI queda
-   en un registro. Si es empresa, van a registros públicos (NIT, razón social,
-   dirección, sitio, teléfono, representante, constitución). Si el tipo sigue
-   sin resolverse, la siguiente consulta solo intenta distinguirlo.
+The response is `{ plan, rounds, candidates }`. Each candidate carries the 15
+contract fields in `IDENTITY_FIELD_DEFINITIONS` order, each with `value`,
+`status` (`found`, `not_found`, `conflicting`, `alleged`), optional `note`,
+`score`, `confidence` and `sources[]` (`source`, `title`, `url`). After the
+candidates are built, `scoreResults` makes a single scoring call: primary /
+secondary / tertiary source, official or not, and how many independent sources
+repeat the value. Score runs 1–100: 1–50 uncertain (hidden), 51–79 probable,
+80–100 corroborated. A URL that did not come from the searches is discarded;
+a value left without sources becomes `not_found` with `value: null`.
 
-3. El modelo actualiza `candidates`. La ronda siguiente no depende de que
-   pida NIT: se arma con el tipo ya encontrado. En la tercera ronda no hay
-   otra búsqueda. Un perfil incompleto sigue siendo un candidato: si el
-   modelo no devuelve ninguno y las búsquedas nombraron al sujeto, la
-   respuesta trae una entidad por cada resultado de Wikidata o, si Wikidata
-   no trajo ninguna, un candidato cuyo nombre citan las páginas de Tavily.
-   El resto de campos queda en `not_found`.
+One strong source reaches `probable`, but a single source never passes 79, so
+`corroborated` requires at least two independent origins. An origin is not a
+host: two articles from the same outlet count once, and syndicated copies with
+the same normalized headline or ≥0.92 token overlap do not corroborate either.
+`scoreResults` never rewards repetition within one outlet or one domain.
 
-La respuesta es `{ plan, rounds, candidates }`. Cada candidato trae los 15
-campos del contrato, en el orden de `IDENTITY_FIELD_DEFINITIONS`. Cada campo
- tiene `value`, `status` (`found`, `not_found`, `conflicting` o `alleged`),
-`note` (una aclaración opcional, por ejemplo que una dirección es de una
-oficina y no del domicilio), `score`, `confidence` y `sources[]` con
-`source`, `title` y `url`. Después de armar los candidatos, `scoreResults`
-hace una sola llamada al modelo y puntúa cada resultado: primaria, secundaria
-o terciaria, si es fuente oficial y si el dato se repite en una, dos o más
-fuentes. Ese puntaje va de 1 a 100. De 1 a 50 el dato es incierto y no se
-muestra. De 51 a 79 se muestra como probable. De 80 a 100 se muestra como
-corroborado. Si el modelo cita una URL que no
-salió de Tavily o Wikidata, esa fuente se descarta. Un valor que se queda sin
-fuente pasa a `not_found` y `value: null` (`type` guarda `unknown`).
+If the plan fails, the response is a 502 `ApiError`. If a later round fails
+with plan or searches already accumulated, the 502 body carries that partial
+state plus `error`. Model JSON gets one repair pass; if it still does not
+parse, the error is `invalid_model_json`. Values that arrive as "null",
+"none", "n/a" and similar tokens are treated as empty.
 
-Si el plan no llega a generarse, la respuesta es un `ApiError` con estado 502.
-Si una ronda posterior falla y ya hay plan o búsquedas, el estado es 502 y el
-cuerpo incluye lo acumulado más `error`. El JSON del modelo tiene un intento
-de reparación; si tampoco parsea, el error es `invalid_model_json`.
+### Connections
 
-Usa `TAVILY_API_KEY` y un modelo (`OPENROUTER_API_KEY`, con `NVIDIA_API_KEY`
-como respaldo). Sin la key de búsqueda, o sin ninguna key de modelo, la
-respuesta es `missing_api_key` y la ruta no se marca como demo.
+`POST /identity/connections` runs **one turn** per request so it never hits the
+300 s Worker timeout; the frontend chains turns while `canContinue` is `true`.
+There are three beats in the same loop, not a third product phase:
 
-La puntuación quedó recalibrada: una sola fuente fuerte ya alcanza `probable`,
-pero una fuente nunca pasa de 79 puntos, así que `corroborated` exige al menos
-dos orígenes independientes. Un origen no es un host: dos notas del mismo medio
-cuentan una sola vez y una nota sindicada o republicada en otro dominio, con el
-mismo titular (normalizado sin acentos, puntuación ni el sufijo del medio, o con un
-solapamiento de tokens de 0.92 o más), tampoco corrobora. `scoreResults` ya no
-premia la repetición dentro del mismo medio ni dentro de un solo dominio.
-Las pruebas deterministas de esta regla viven en `backend/test` y se ejecutan
-con `pnpm --filter @consta/backend test`.
+1. **Turn 1** — first degree only: people and organizations directly linked to
+   the subject.
+2. **Turn 2** — one more hop from those identities. Chains that do not close
+   against the subject stay as open branches (concrete names).
+3. **Turn 3** — only if open branches exist: cross each branch name with the
+   subject. If turn 2 left no names to cross, `canContinue` is `false` and the
+   third turn is never paid (`stoppedReason` says so).
 
-### Conexiones
+Turns also stop early when no new claims appear. An optional `branchContext`
+(`entityId`, `claimId`, `label`) skips the automatic timing: every query starts
+from the chosen identity or claim and looks for public-interest connections,
+including any direct link back to the subject.
 
-`POST /identity/connections` es el paso siguiente a la confirmación de un
-candidato. El cuerpo es
-{`"name": "...", "details": "...", "interest": "...", "investigation": {...}, "candidateId": "c1", "connection": {...}, "branchContext": {"entityId": "...", "claimId": "...", "label": "..."}}`.
+Each turn, in order:
 
-**`branchContext`** es un objeto opcional que permite profundizar en una rama
-específica. Esa vuelta no sigue el tiempo automático del loop: todas las
-consultas parten de la identidad o afirmación elegida y buscan conexiones
-públicas de interés periodístico (partidos, fondeo, empresas asociadas, apoyo
-externo). Si aparece un vínculo directo con el sujeto, también se incluye.
+1. **Plan.** 1–5 queries in the `{ query, purpose, tool }` format. Repeats of a
+   previous `queryKey` are dropped.
+2. **Searches.** Run with the same engine as the investigation. Without
+   results the turn stops with `stoppedReason: "no results"`.
+3. **Entity identification mini-step.** One model call picks up to five
+   institutions, companies and public figures from the numbered results. It
+   cannot invent: every name must appear in some result (checked with
+   `mentionsName`), and the queried subject plus already-resolved entities are
+   dropped. Each entity gets one resolution pass. If the mini-step's JSON is
+   invalid, the model is retried once with a strict reminder, then a
+   heuristic fallback extracts proper names from the results so the turn is
+   not lost; the claim step still validates every entity against the text, so
+   fallback noise cannot reach the map.
+4. **Reasoning.** Another call turns the numbered sources into claims
+   `{ text, parentText, entities, sources, confidence }`. Source indexes are
+   converted into links; a claim with no valid sources is discarded.
+   `parentText` is resolved against accumulated claims to build the thread.
+5. **Entity cards.** Cards are filled from what the mini-step already found;
+   the subject's own card stays in the panel. No per-entity scoring call.
 
-- **`entityId`**: Identificador de una entidad específica dentro de la investigación.
-- **`claimId`**: Identificador de una afirmación específica.
-- **`label`**: Etiqueta descriptiva para el contexto de la rama.
+The response is `{ claims, rounds, summary, canContinue, stoppedReason }`.
+The frontend groups all claims linking the same pair into one thread; clicking
+opens a table with text, sources and confidence.
 
-El endpoint ahora valida que `branchContext` sea un objeto válido y que sus campos sean cadenas.
+## Shared store (`bd`)
 
-Cada request ejecuta **una sola vuelta** para no agotar el timeout de 300 s. El
-frontend encadena mientras `canContinue` sea `true`. En todas las vueltas se
-buscan conexiones de interés público (partidos, fondeo, empresas asociadas,
-apoyo externo). Si el periodista envió `interest`, ese foco manda; si no, ese
-es el default. Hay tres tiempos en el mismo loop, no una tercera fase de
-producto:
+`bd` is one more tool the model may pick in plans, candidates and connections.
+It is not a source: it searches D1 (FTS5) for previously saved claims and
+returns each with text, corroboration level, score and original sources. When
+the model cites a `bd` result, the backend expands it to those original
+sources; a `bd` link is never stored or shown as evidence.
 
-1. **Vuelta 1** — solo primer grado: personas y organizaciones unidas
-   directamente al sujeto.
-2. **Vuelta 2** — un salto más desde esas identidades. Las cadenas que no
-   cierren contra el sujeto quedan como ramas abiertas (nombres concretos).
-3. **Vuelta 3** — solo si hay ramas abiertas: combina cada nombre de rama con
-   el del sujeto. Si la vuelta 2 no dejó nombres que cruzar, `canContinue` es
-   `false` y la tercera no se paga (`stoppedReason`: "sin ramas abiertas que
-   cruzar con el sujeto"). El periodista que elige una rama con
-   `branchContext` sí entra.
-
-La parada también es anticipada cuando no hay afirmaciones nuevas.
-
-### Base de investigaciones (`bd`)
-
-`bd` es una herramienta más que el modelo puede elegir en el plan, los
-candidatos y las conexiones. No es una fuente: busca en D1 con FTS5 las
-afirmaciones ya guardadas y devuelve cada una con su texto, su nivel de
-corroborancia, su puntaje y sus fuentes originales. Cuando el modelo cita un
-resultado `bd`, el backend lo expande a esas fuentes originales; nunca guarda
-ni muestra un enlace `bd` como evidencia.
-
-`POST /identity/analysis` guarda el sujeto, sus conexiones y sus afirmaciones.
-El `content_hash` hace que reintentar la misma investigación actualice la fila
-existente en lugar de duplicarla. Las afirmaciones sin fuente no se guardan.
-La base es global y compartida, sin autenticación ni visor por ahora.
-
-Migraciones locales:
+`POST /identity/analysis` saves the subject, its connections and claims. The
+content hash makes retries update the existing row instead of duplicating it.
+Claims without sources are not saved. The store is global and shared, with no
+auth or viewer yet.
 
 ```bash
-pnpm --filter @consta/backend exec wrangler d1 migrations apply consta --local
+pnpm --filter @consta/backend exec wrangler d1 migrations apply consta --local   # dev
+pnpm --filter @consta/backend exec wrangler d1 migrations apply consta --remote  # production
 ```
 
-La tabla FTS5 (`search_fts`) se llena en cada guardado. Si FTS falla, `bd` cae
-a una búsqueda `LIKE` para no romper la investigación.
+The FTS5 table (`search_fts`) is filled on every save; if FTS fails, `bd`
+falls back to a `LIKE` search.
 
-### Imágenes por ocupación
+## Occupation images
 
-Las fotos no bloquean identidad ni conexiones. `POST /identity/investigate`
-devuelve el expediente al instante y, si el sujeto es una persona, encola la
-imagen con `waitUntil`. `GET /occupation-image` también responde de inmediato.
+Images never block identity or connections. `GET /occupation-image` answers
+immediately from cache and only generates when nothing is stored.
 
-Hay dos placeholders en `occupation_images`:
-
-- `persona`: retrato genérico. Se muestra mientras la foto no está lista, si
-  no hay match en D1, o si la generación falla.
-- `empresa`: edificio / institución. Las empresas y agencias **nunca** reciben
-  un retrato generado.
-
-`GET /occupation-image?name=Médico&kind=person` reutiliza el cargo ya guardado.
-Solo si no hay match se dispara **una** generación (cero reintentos). Hasta
-entonces el JSON `?meta=1` marca `pending: true` y `placeholder: "persona"`.
-Si el modelo falla, se guarda el placeholder bajo esa ocupación para no volver
-a llamar. `kind=enterprise` (o `name=empresa`) sirve el edificio y no genera.
-
-El prompt de pixel art vive en `occupationImage.ts` (`occupationImagePrompt`):
-rejilla 24×24, paleta tinta/menta/verde, busto de frente, sin fotorealismo ni
-texto. Con `IMAGE_PROVIDER=mock` el SVG local es determinista por cargo.
-`openrouter` y `nvidia` hacen una sola llamada a `/images/generations`.
-
-En la primera llamada, sin `connection`, el backend:
-
-1. Busca el candidato por `candidateId`.
-2. Crea la afirmación raíz `root`: texto
-   `El sujeto investigado es <etiqueta>.`, `round: 0`, `parentId: null` y
-   `sources` con la unión de las fuentes de los campos del candidato (máximo
-   5, con el `score` que dejó la investigación inicial).
-3. Arma `summary.who` con `candidate.description` o, si falta, una frase con
-   tipo, ocupación, nacionalidad y dirección. `findings` empieza en
-   "Todavía no hay afirmaciones probables.".
-4. Devuelve `canContinue: true` si el candidato existe.
-
-Si ya viene `connection` con `canContinue: false` o con tres rondas, se
-devuelve sin cambios.
-
-Cada vuelta hace, en este orden:
-
-1. **Plan de conexiones.** Una llamada al modelo recibe el nombre, `details`,
-   `summary.who`, la afirmación raíz, las afirmaciones acumuladas y las
-   consultas previas. Devuelve de 1 a 5 consultas con el mismo formato
-   `{ query, purpose, tool }` de la investigación (`tool` es `wikidata` o
-   `tavily`; si falta o no es válido, la consulta se busca en ambas). `purpose`
-   describe la conexión o afirmación a explorar, no un campo de perfil. Se
-   descartan las consultas que repiten una `queryKey` previa.
-
-2. **Búsquedas.** Se ejecutan con `searchIdentityQuery`, la misma función de la
-   investigación. Si no hay resultados, la vuelta se detiene con
-   `stoppedReason: "sin resultados"`.
-
-3. **Minipaso de identificación por lote.** Una sola llamada al modelo recibe
-   los resultados numerados del lote y elige hasta 5 instituciones, empresas y
-   personas públicas más importantes. No puede inventar: cada `name` debe
-   aparecer en el `title` o el `snippet` de algún resultado (se comprueba con
-   `mentionsName`) y se descarta al sujeto consultado y a las entidades ya
-   resueltas. Cada entidad se resuelve en una pasada: `searchIdentityQuery`
-   con `{ query: name, tool: null }`, una ronda sintética y
-   `candidatesFromPublicResults`. Se elige el candidato cuyo `label` o `name`
-   coincide mejor; si no hay, queda una entidad mínima `type: "unknown"` con
-   descripción "Sin identidad pública resuelta.". Estas búsquedas se agregan a
-   `rounds[].searches` (y a la lista de fuentes del razonamiento) y al catálogo
-   de la vuelta. No hay una llamada de scoring por entidad.
-
-4. **Razonamiento.** Otra llamada recibe el nombre, `details`, `summary.who`, la
-   afirmación raíz, las afirmaciones acumuladas, las entidades identificadas y
-   la lista **numerada** de fuentes de la vuelta (`source`, `title`, `snippet`;
-   nunca URLs). Devuelve solo
-   `{"claims":[{"afirmacion":"...","parentText":"...","entidades":["..."],
-   "fuentes":[1,2],"confianza":"probable"}]}`. `fuentes` son índices de la
-   lista numerada: el backend los convierte en enlaces y descarta la afirmación
-   si no queda ninguna fuente válida. `parentText` se resuelve contra las
-   afirmaciones ya acumuladas para armar el hilo; `entidades` se cruza con las
-   identificadas en el minipaso anterior y se descarta al sujeto.
-
-5. **Tarjeta de cada identidad.** No se vuelve a correr `investigateIdentity`.
-   La tarjeta se llena con tipo, descripción y fuentes que ya trajo el
-   minipaso de identificación. El sujeto queda fuera: su ficha ya está
-   confirmada en el panel.
-
-La respuesta es `{ claims, rounds, summary, canContinue, stoppedReason }`.
-`claims` acumula la raíz y las afirmaciones nuevas con sus fuentes, entidades,
-puntaje y confianza. `rounds[]` guarda las consultas, búsquedas, entidades y
-afirmaciones de cada vuelta. `summary` mantiene el contexto del sujeto y el
-conteo de afirmaciones. El frontend agrupa en un solo hilo todas las
-afirmaciones que unen al mismo par; el clic abre la tabla con texto, fuentes y
-confianza (incierto, probable, corroborado). Las etiquetas de relación
-(«hermano», «ministro») se derivan del texto para el hilo y para esa tabla.
+- Two placeholders live in `occupation_images`: `persona` (generic portrait)
+  and `empresa` (building). Companies and agencies never receive a generated
+  portrait.
+- Compound occupations ("Doctor, politician and entrepreneur") are split into
+  roles; the endpoint reuses the first role already cached. Only when nothing
+  matches does it generate the primary role and store it under that key, so
+  other investigations can reuse it.
+- The pixel art prompt lives in `occupationImage.ts`
+  (`occupationImagePrompt`): 24×24 grid, ink/mint/green palette, frontal bust,
+  no photorealism, no text.
+- `IMAGE_PROVIDER=mock` renders a deterministic local SVG. `openrouter` and
+  `nvidia` make a single `/images/generations` call; on failure the cached
+  image or placeholder is served.
 
 ## CORS
 
-Se permite explícitamente:
+Explicitly allowed:
 
-- `http://localhost:3000` (frontend local).
-- Cualquier origen `https://*.pages.dev` (producción y previews de Cloudflare
-  Pages).
-- Orígenes adicionales listados en `CORS_ORIGINS` (separados por coma), por
-  ejemplo un dominio propio.
+- `http://localhost:3000` (local frontend; add other ports to `CORS_ORIGINS`).
+- Any `https://*.pages.dev` origin.
+- Extra origins from `CORS_ORIGINS` (comma separated).
 
-Métodos: `GET`, `POST`, `OPTIONS`. Cabeceras permitidas: `Content-Type`,
-`Authorization`. La cabecera de respuesta `X-Consta-Demo` se expone al
-navegador. No se habilitan credenciales.
+Methods: `GET`, `POST`, `OPTIONS`. Allowed headers: `Content-Type`,
+`Authorization`. The `X-Consta-Demo` response header is exposed. No
+credentials.
 
-## Integración con el Channel GT
+## Model and search helpers
 
-El analyzer puede consumir `@consta/gt-data` server-side. Configura
-`GT_DATA_URL` (por ejemplo `http://localhost:8788`) y las tools `/tools/*`,
-`/search` y `/entities/:id` se resuelven contra el canal. `POST /analyze`
-obtiene el bundle del canal y construye el grafo y los claims con
-`src/analyze.ts`.
+`src/generalFuncs.ts` exposes two fixed searches. Neither throws; both return
+`{ ok, source, query, items, retrievedAt, error? }`:
 
-Si el canal no responde, el backend usa el bundle demo local y responde con
-`X-Consta-Fallback: local-demo`. Cuando sí responde, añade
-`X-Consta-Channel: gt`. El canal tiene un timeout corto y un cooldown para no
-bloquear el workspace cuando está caído.
-
-El navegador nunca llama al Channel directamente: solo habla con este analyzer.
-
-## Herramientas generales
-
-`src/generalFuncs.ts` expone dos búsquedas fijas. Ninguna lanza excepciones:
-devuelven `{ ok, source, query, items, retrievedAt, error? }`.
-
-| Función | Fuente | Key |
+| Function | Source | Key |
 | --- | --- | --- |
-| `searchWikidata(env, query, options?)` | Wikidata `wbsearchentities` | No |
-| `searchTavily(env, query, options?)` | Tavily Search + contenido | `TAVILY_API_KEY` |
+| `searchWikidata(env, query, options?)` | Wikidata `wbsearchentities` | none |
+| `searchTavily(env, query, options?)` | Tavily Search + content | `TAVILY_API_KEY` |
 
-Cada item trae `title` y `url`. Wikidata añade `id` (QID), `snippet` y
-`license: "CC0-1.0"`. Tavily añade `snippet`, `content` (Markdown completo de la
-página), `score` y `publishedDate`. Tavily no declara una licencia única: el
-contenido es de terceros.
-
-Opciones: `limit`, `language` (solo Wikidata), `timeoutMs`; en Tavily también
-`searchDepth`, `includeRawContent`, `timeRange` y `topic`. Por defecto Tavily
-pide `raw_content` en Markdown. Timeout por defecto: 10 s. Sin key,
-`searchTavily` devuelve `missing_api_key` sin lanzar. `searchWikidata` no
-lanza: un 429, un 5xx, un timeout o un error de red se reintenta dos veces.
+Each item carries `title` and `url`. Wikidata adds `id` (QID), `snippet` and
+`license: "CC0-1.0"`. Tavily adds `snippet`, `content` (full page Markdown),
+`score` and `publishedDate`. Options: `limit`, `language` (Wikidata only),
+`timeoutMs`; Tavily also `searchDepth`, `includeRawContent`, `timeRange` and
+`topic`. Default timeout is 10 s. Without a key, `searchTavily` returns
+`missing_api_key`. Wikidata retries 429/5xx/timeout twice.
 
 ### `callOpenRouter`
 
-`callOpenRouter(env, messages, options?)` llama a OpenRouter y prueba modelos
-free que declaran salida de texto. Si `/models` responde, filtra por `:free` y
-`output_modalities` con `text`; si no, usa una lista de respaldo. Reintenta
-429, 5xx, timeout, errores de red y una respuesta sin texto antes de pasar al
-siguiente modelo. Si la cuota diaria `free-models-per-day` se agota (la
-comparten todos los `:free`), si la clave de OpenRouter falla o si ningún
-modelo devuelve texto, pasa a NVIDIA NIM (`NVIDIA_BASE_URL`, por defecto
-`https://integrate.api.nvidia.com/v1`) con `NVIDIA_MODEL` o, si falta,
-`nemotron-3.5-lightning` y luego `bolt`. El resultado indica el proveedor que
-atendió (`provider`). Los intentos quedan en `attempts` con su `provider`,
-`model` y código de error.
+`callOpenRouter(env, messages, options?)` calls OpenRouter and tries free text
+models. If `/models` responds it filters by `:free` with `text` output; else it
+uses a fallback list. It retries 429, 5xx, timeouts, network errors and empty
+replies before moving to the next model. When the shared `free-models-per-day`
+quota is gone, the OpenRouter key fails, or no model returns text, it falls
+back to NVIDIA NIM (`NVIDIA_BASE_URL`, default
+`https://integrate.api.nvidia.com/v1`) with `NVIDIA_MODEL` or, if missing,
+`nemotron-3.5-lightning` and then `bolt`. The result reports which provider
+served the call; attempts are listed with provider, model and error code.
 
-Devuelve `{ ok, text, model, usage?, attempts, error? }`. No lanza. Un 401 de
-la clave detiene el recorrido. Un 403 que nombra a un modelo concreto lo salta
-y prueba el siguiente.
+Returns `{ ok, text, model, usage?, attempts, error? }`. Never throws. A 401
+stops the walk; a 403 naming a specific model skips it.
 
-Opciones: `models`, `temperature`, `maxTokens`, `timeoutMs`, `retries` y
+Options: `models`, `temperature`, `maxTokens`, `timeoutMs`, `retries`,
 `retryDelayMs`.
 
-## Variables de entorno
+## Environment variables
 
-| Variable | Uso | Default |
+| Variable | Use | Default |
 | --- | --- | --- |
-| `ENVIRONMENT` | Valor de `environment` en `/health`. | `development` (local); `demo` en `wrangler.jsonc`. |
-| `CORS_ORIGINS` | Orígenes extra permitidos, separados por coma. | Vacío. |
-| `GT_DATA_URL` | URL base del Channel GT que consume el analyzer. | Vacío: usa el bundle demo local. |
-| `TAVILY_API_KEY` | API key server-side de Tavily. | Vacío: `searchTavily` devuelve `missing_api_key`. |
-| `TAVILY_BASE_URL` | Base de Tavily. | `https://api.tavily.com`. |
-| `TAVILY_SEARCH_DEPTH` | `basic`, `advanced`, `fast` o `ultra-fast`. | `basic`. |
-| `TAVILY_INCLUDE_RAW_CONTENT` | Pide el contenido completo en la búsqueda. | `true`. |
-| `WIKIDATA_API_URL` | Endpoint de la API de Wikidata. | `https://www.wikidata.org/w/api.php`. |
-| `WIKIDATA_LANGUAGE` | Idioma de búsqueda en Wikidata. | `es`. |
-| `OPENROUTER_API_KEY` | API key server-side de OpenRouter. | Vacío: `callOpenRouter` devuelve `missing_api_key`. |
-| `OPENROUTER_BASE_URL` | Base de OpenRouter. | `https://openrouter.ai/api/v1`. |
-| `OPENROUTER_MODEL` | Modelo preferido; se prueba primero. | Vacío. |
-| `OPENROUTER_MODELS` | Lista separada por comas; reemplaza el descubrimiento. | Vacío. |
-| `OPENROUTER_SITE_URL` | `HTTP-Referer` para OpenRouter. | Vacío. |
-| `OPENROUTER_APP_NAME` | `X-Title` para OpenRouter. | Vacío. |
-| `NVIDIA_API_KEY` | API key server-side de NVIDIA NIM, respaldo de OpenRouter. | Vacío: no hay respaldo. |
-| `NVIDIA_BASE_URL` | Base de NVIDIA NIM. | `https://integrate.api.nvidia.com/v1`. |
-| `NVIDIA_MODEL` | Modelo de NVIDIA preferido; si falta, usa lightning y bolt. | Vacío. |
-| `DB` | Binding D1 de la base compartida (`bd` e imágenes). | Configurado en `wrangler.jsonc`. |
-| `IMAGE_PROVIDER` | `mock` (pixel art local), `openrouter` o `nvidia`. Una sola llamada; si falla, `persona`. | `mock`. |
-| `IMAGE_MODEL` | Modelo de imagen. | `meta/muse-image`. |
+| `ENVIRONMENT` | `environment` value in `/health`. | `development` locally; `demo` in `wrangler.jsonc`. |
+| `CORS_ORIGINS` | Extra allowed origins, comma separated. | Empty. |
+| `TAVILY_API_KEY` | Tavily key (server side). | Empty: `searchTavily` returns `missing_api_key`. |
+| `TAVILY_BASE_URL` | Tavily base. | `https://api.tavily.com`. |
+| `TAVILY_SEARCH_DEPTH` | `basic`, `advanced`, `fast` or `ultra-fast`. | `basic`. |
+| `TAVILY_INCLUDE_RAW_CONTENT` | Request full page content. | `true`. |
+| `WIKIDATA_API_URL` | Wikidata API endpoint. | `https://www.wikidata.org/w/api.php`. |
+| `WIKIDATA_LANGUAGE` | Wikidata search language. | `es`. |
+| `OPENROUTER_API_KEY` | OpenRouter key (server side). | Empty: `callOpenRouter` returns `missing_api_key`. |
+| `OPENROUTER_BASE_URL` | OpenRouter base. | `https://openrouter.ai/api/v1`. |
+| `OPENROUTER_MODEL` | Preferred model; tried first. | Empty. |
+| `OPENROUTER_MODELS` | Comma-separated list; replaces discovery. | Empty. |
+| `OPENROUTER_SITE_URL` | `HTTP-Referer` for OpenRouter. | Empty. |
+| `OPENROUTER_APP_NAME` | `X-Title` for OpenRouter. | Empty. |
+| `NVIDIA_API_KEY` | NVIDIA NIM key, OpenRouter fallback. | Empty: no fallback. |
+| `NVIDIA_BASE_URL` | NVIDIA NIM base. | `https://integrate.api.nvidia.com/v1`. |
+| `NVIDIA_MODEL` | Preferred NVIDIA model. | Empty. |
+| `DB` | D1 binding for the shared store and images. | Set in `wrangler.jsonc`. |
+| `IMAGE_PROVIDER` | `mock`, `openrouter` or `nvidia`. | `mock`. |
+| `IMAGE_MODEL` | Image model. | `meta/muse-image`. |
+| `GT_DATA_URL` | Unused. The GT data channel is inactive. | Empty. |
 
-Copia `.dev.vars.example` a `.dev.vars` para desarrollo local. `.dev.vars` está
-ignorado por git.
+Copy `.dev.vars.example` to `.dev.vars` for local development. `.dev.vars` is
+git-ignored. For production secrets use
+`pnpm --filter @consta/backend run secrets` (wraps `wrangler secret put`) or
+the dashboard; public vars belong in `wrangler.jsonc`.
 
-## Datos demo
+## D1
 
-Los datos demo viven en `packages/contracts/src/demo.ts` y son compartidos con el
-frontend. El backend los usa como fallback y, si `GT_DATA_URL` está configurado,
-consume el Channel GT. Las investigaciones reales de identidad se guardan en D1
-con el binding `DB`; los datos demo no se escriben allí.
+D1 is wired with binding `DB` (database `consta`) and migrations
+`backend/migrations/0001_identity_analysis.sql` (analyses, entities, claims,
+FTS5, occupation images) and `0002_occupation_placeholders.sql` (`persona`,
+`empresa` keys). Locally `wrangler dev` stores data in `.wrangler/`. Before
+serving production traffic, run the migrations with `--remote`.
 
-`POST /analyze` ya no devuelve un run estático: construye el grafo, los claims y
-los pasos a partir del bundle de la entidad solicitada (o del primer resultado de
-`query`). `depth` se valida para el contrato futuro; hoy el análisis es de primer
-grado.
+The shared store holds names and claims of investigated people. It has no
+auth, deletion or viewer yet; a delete endpoint and a privacy note should land
+before it is opened.
 
-## D1 y R2
-
-D1 ya está conectado con el binding `DB` y la migración
-`backend/migrations/0001_identity_analysis.sql` (análisis, entidades,
-afirmaciones, FTS5 e imágenes por ocupación). En local, `wrangler dev` guarda
-en `.wrangler/`.
-
-Para desplegar:
-
-1. `pnpm --filter @consta/backend exec wrangler d1 create consta` y reemplazar
-   `database_id` en `wrangler.jsonc` por el id real.
-2. `pnpm --filter @consta/backend exec wrangler d1 migrations apply consta --remote`
-   antes de servir tráfico.
-3. R2 sigue pendiente: crear `consta-evidence`, añadir el binding
-   `EVIDENCE_BUCKET` y guardar allí los documentos originales, con licencia y
-   atribución por registro.
-
-La base compartida guarda nombres y afirmaciones de personas investigadas. Por
-ahora no tiene autenticación, borrado ni visor público; conviene añadir un
-endpoint de borrado y una nota de privacidad antes de abrirla.
-
-## Archivos
+## Layout
 
 ```text
 backend/
@@ -492,12 +328,18 @@ backend/
   tsconfig.json
   wrangler.jsonc
   migrations/
-    0001_identity_analysis.sql  # análisis, afirmaciones, FTS5 e imágenes
-    0002_occupation_placeholders.sql  # claves persona y empresa
+    0001_identity_analysis.sql        # analyses, claims, FTS5, occupation images
+    0002_occupation_placeholders.sql  # persona and empresa keys
+  scripts/
+    secret-bulk.mjs                   # wrangler secret put wrapper
   src/
-    analyze.ts   # grafo, claims y run determinista
-    db.ts        # guardado, búsqueda bd e imágenes en D1
-    occupationImage.ts  # placeholders, generación async y prompt pixel art
-    gt.ts        # cliente del Channel GT con timeout y fallback
-    index.ts     # Hono, rutas, CORS y validación
+    analyze.ts      # demo graph, claims and run
+    db.ts           # shared store, bd search, occupation cache (D1)
+    occupationImage.ts  # placeholders, generation, pixel art prompt
+    generalFuncs.ts # Wikidata + Tavily searches
+    sourceScore.ts  # scoring and corroboration
+    identity.ts     # investigation, connections, bd tool, prompts
+    gt.ts           # legacy GT channel client (inactive)
+    index.ts        # Hono app, routes, CORS, validation
+  test/             # node --test suites
 ```

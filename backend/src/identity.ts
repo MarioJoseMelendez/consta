@@ -3242,6 +3242,133 @@ const CONNECTION_ENTITY_MAX_TOKENS = 2_000;
 const CONNECTION_CLAIM_MAX_TOKENS = 4_500;
 const CONNECTION_SUMMARY_MAX_TOKENS = 2_000;
 
+const JSON_REMINDER =
+  "Your previous reply was not valid JSON. Reply again with ONLY the JSON object. No markdown, no commentary, no trailing commas.";
+
+/**
+ * Llama al modelo de conexiones y exige JSON. Si la llamada falla se repite
+ * una vez; si el JSON no es válido, se repara y, si aun así falla, se vuelve
+ * a pedir con un recordatorio estricto. Un fallo aquí no debe costar la
+ * vuelta completa: quien llama decide si hay respaldo.
+ */
+async function connectionModelJson(
+  env: GeneralEnv,
+  input: { system: string; user: string; maxTokens: number; stage: string },
+): Promise<
+  | { ok: true; value: unknown }
+  | {
+      ok: false;
+      stage: "call" | "parse";
+      error: ReturnType<typeof fromGeneralError>;
+    }
+> {
+  const messages = [
+    { role: "system" as const, content: input.system },
+    { role: "user" as const, content: input.user },
+  ];
+
+  let call = await callOpenRouter(
+    env,
+    messages,
+    connectionModelCallOptions(env, input.maxTokens),
+  );
+  if (!call.ok) {
+    logModelFailure(`${input.stage} (retry)`, call.attempts, call.error?.code);
+    call = await callOpenRouter(
+      env,
+      messages,
+      { ...connectionModelCallOptions(env, input.maxTokens), temperature: 0 },
+    );
+  }
+  if (!call.ok) {
+    logModelFailure(input.stage, call.attempts, call.error?.code);
+    return {
+      ok: false,
+      stage: "call",
+      error: fromGeneralError(call.error, `${input.stage} could not be completed.`),
+    };
+  }
+
+  let parsed = await parseConnectionJson(env, call.text, input.maxTokens);
+  if (!parsed.ok) {
+    const retry = await callOpenRouter(
+      env,
+      [...messages, { role: "user" as const, content: JSON_REMINDER }],
+      { ...connectionModelCallOptions(env, input.maxTokens), temperature: 0 },
+    );
+    if (retry.ok) {
+      const retryJson = await parseConnectionJson(env, retry.text, input.maxTokens);
+      if (retryJson.ok) parsed = retryJson;
+    }
+  }
+  if (!parsed.ok) {
+    return {
+      ok: false,
+      stage: "parse",
+      error: fromGeneralError(
+        parsed.error,
+        `${input.stage} did not return valid JSON.`,
+      ),
+    };
+  }
+  return { ok: true, value: parsed.value };
+}
+
+const FALLBACK_ENTITY_MAX = 8;
+
+/**
+ * Respaldo sin modelo: saca nombres propios (secuencias de palabras
+ * capitalizadas) de los resultados. No reemplaza al minipaso de
+ * identificación; solo evita perder la vuelta y dejar el mapa vacío cuando
+ * el modelo no devuelve JSON. Las afirmaciones siguen validando cada
+ * entidad contra el texto, así que el ruido no llega al mapa.
+ */
+function fallbackConnectionEntities(
+  items: readonly IdentitySearchItem[],
+  subjectLabel: string,
+): IdentityEntity[] {
+  const subjectKey = normalizeClaimText(subjectLabel);
+  const entities: IdentityEntity[] = [];
+  const seen = new Set<string>();
+  if (subjectKey) seen.add(subjectKey);
+
+  for (const item of items) {
+    const text = `${item.title}. ${item.snippet ?? ""}`;
+    for (const match of text.matchAll(
+      /[A-ZÁÉÍÓÚÑ][\p{L}'’-]*(?:\s+[A-ZÁÉÍÓÚÑ][\p{L}'’-]*|\s+(?:de|del|la|el|los|las)\s+[A-ZÁÉÍÓÚÑ][\p{L}'’-]*)+/gu,
+    )) {
+      const label = match[0].replace(/\s+/g, " ").trim();
+      const key = normalizeClaimText(label);
+      if (!key || seen.has(key)) continue;
+      if (
+        /^(?:the|this|that|these|those|who|what|how|why|when|ap|reuters|afp|efe|bbc|cnn|getty)/i.test(
+          label,
+        )
+      ) {
+        continue;
+      }
+      seen.add(key);
+      entities.push({
+        id: `fb-${entities.length + 1}`,
+        label,
+        type: /\b(?:Inc|LLC|Ltd|Corp|Company|Ministry|Department|Fund|Party|University|Agency|Bureau|Court|Congress|Senate|Government)\b/.test(
+          label,
+        )
+          ? "enterprise"
+          : "person",
+        description: "",
+        occupation: null,
+        sources: [sourceRef(item)],
+        score: null,
+        confidence: null,
+      });
+      if (entities.length === FALLBACK_ENTITY_MAX) return entities;
+    }
+    if (entities.length === FALLBACK_ENTITY_MAX) break;
+  }
+  return entities;
+}
+
 async function runConnectionRound(
   env: GeneralEnv,
   input: {

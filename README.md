@@ -1,134 +1,100 @@
 # Consta
 
-**Del registro a la conexión.**
+**From records to connections.**
 
-Consta es una herramienta de investigación que conecta entidades, empresas y
-personas a partir de registros públicos, con evidencia citada y separación
-explícita entre hechos, probabilidades y ausencias.
+Consta is a research tool that maps the people and companies around a subject
+from public records, with cited evidence and an explicit separation between
+corroborated facts, probable claims and absences.
 
-GT-first e internacionalizable: el país se modela como un `CountryPack` con
-`SourceAdapter`s, esquemas de identificadores y locales. Los canales de datos son
-endpoints HTTP remotos que el analyzer consume **server-side**; el navegador
-nunca habla directo con las fuentes.
+The product today is the **identity workspace**: you type a name, the backend
+plans searches across public sources (Tavily, Wikidata) plus a shared store of
+earlier investigations (`bd`), resolves the subject into a candidate profile,
+and then runs a connection loop that builds a web of claims — each one scored,
+corroborated and linked back to its original sources.
 
-> **Modo demo.** Las entidades, vínculos, montos y expedientes que se ven hoy son
-> ficticios. No describen personas, empresas ni contratos reales. Cada respuesta
-> del backend y del canal GT lo declara en headers y en los datos.
-
-## Arquitectura
+## Architecture
 
 ```text
-frontend/        Next.js App Router, static export → Cloudflare Pages
-backend/         Analyzer Hono + Workers: API para el frontend, grafo y expediente
-backendGTData/   Channel GT: RGAE, Guatecompras OCDS y Wikidata → D1/R2
-packages/contracts/  Tipos compartidos y datos demo ficticios
+frontend/            Next.js App Router, static export → Cloudflare Pages
+backend/             Hono + Cloudflare Workers: identity API, shared store, images
+packages/contracts/  Shared TypeScript types and demo data
+backendGTData/       INACTIVE — GT data channel, kept as a dead repo for now
 ```
 
-Flujo:
+Flow:
 
 ```text
-Navegador → backend (analyzer) → backendGTData (Channel GT) → snapshot D1
-                    ↓
-              grafo + claims + evidencia
+Browser → backend (consta-api)
+              ├─ Tavily / Wikidata search
+              ├─ bd: shared research base (D1 + FTS5)
+              └─ occupation pixel art (cached in D1)
+          ↓
+     candidate profile + claims web + evidence
 ```
 
-- `backendGTData` es snapshot-first: el request path solo lee D1/R2. No scrapea,
-  no descarga y no ejecuta browser automation.
-- `backend` puede consumir el Channel GT con `GT_DATA_URL`. Si el canal no
-  responde, usa el bundle demo local para no romper el workspace.
-- `frontend` es un static export de Next.js. En producción apunta a la URL del
-  analyzer con `NEXT_PUBLIC_API_URL`.
+- `backend` is the only live service. It never exposes provider keys to the
+  browser; the frontend only talks to the Worker.
+- `bd` is a tool the model may choose — not a source. It returns saved claims
+  with their corroboration level and original sources, and the backend expands
+  those references when citing them.
+- `frontend` is a static export of Next.js. In production it points at the
+  Worker URL with `NEXT_PUBLIC_API_URL`.
+- `backendGTData` is not used. Its code and docs remain for reference only.
 
-## Arranque
+## Getting started
 
-Requisitos: Node.js >= 20.9 y pnpm 12.
+Requirements: Node.js >= 20.9 and pnpm 12.
 
 ```bash
 pnpm install
-pnpm dev
+pnpm dev:api     # backend on http://localhost:8787
+pnpm dev:web     # frontend on http://localhost:3000
 ```
 
-Servicios:
+Copy `backend/.dev.vars.example` to `backend/.dev.vars` and fill in
+`TAVILY_API_KEY` plus at least one model key (`OPENROUTER_API_KEY`, with
+`NVIDIA_API_KEY` as fallback). Without them the identity endpoints answer
+`missing_api_key`.
 
-| Servicio | URL | Comando |
+### Backend routes
+
+| Method | Route | Use |
 | --- | --- | --- |
-| Frontend | http://localhost:3000 | `pnpm dev:web` |
-| Analyzer | http://localhost:8787 | `pnpm dev:api` |
-| Channel GT | http://localhost:8788 | `pnpm dev:gt` |
+| `GET` | `/health` | Service status |
+| `GET` | `/manifest` | Analyzer manifest |
+| `POST` | `/identity/investigate` | Plan, search rounds and candidate profiles for a name |
+| `POST` | `/identity/more` | Up to two extra targeted searches |
+| `POST` | `/identity/connections` | One turn of the connection loop |
+| `POST` | `/identity/analysis` | Persist an investigation to the shared store (idempotent) |
+| `GET` | `/occupation-image?name=` | Pixel art portrait for an occupation, cached in D1 |
+| `GET` | `/search?q=`, `/entities/:id`, `/tools/*`, `/analyze` | Demo workspace routes (fictitious data) |
 
-Para que el analyzer consuma el Channel GT en local:
+Details, examples and environment variables: [`backend/README.md`](backend/README.md).
 
-```bash
-cp backend/.dev.vars.example backend/.dev.vars
-# backend/.dev.vars
-GT_DATA_URL=http://localhost:8788
-```
+### Frontend
 
-Sin `GT_DATA_URL`, el analyzer usa los datos demo locales. Si el canal está
-configurado pero no responde, el analyzer hace fallback al bundle demo local y
-expone `X-Consta-Fallback: local-demo`.
+Two-click flow: investigate a subject, confirm a candidate, then open the
+connection loop. The claims web renders people and organizations with their
+relationship threads, a "BD" badge marks claims reused from the shared store,
+and occupation pixel art fills the photo boxes with initials as fallback.
+Details: [`frontend/README.md`](frontend/README.md).
 
-### Rutas del analyzer
+## Shared store and images
 
-| Método | Ruta | Uso |
-| --- | --- | --- |
-| `GET` | `/health` | Estado del servicio |
-| `GET` | `/manifest` | Manifest del analyzer |
-| `GET` | `/search?q=` | Búsqueda para el frontend |
-| `GET` | `/entities/:id` | Bundle de entidad para el frontend |
-| `GET` | `/tools/search_entities?q=` | Tool channel/v1 |
-| `GET` | `/tools/get_entity?id=` | Tool channel/v1 |
-| `GET` | `/tools/get_relationships?id=` | Tool channel/v1 |
-| `GET` | `/tools/get_evidence?ids=` | Tool channel/v1 |
-| `GET` | `/tools/get_document?id=` | Metadata registrada; no acepta URLs |
-| `POST` | `/analyze` | Grafo, claims y expediente |
+- D1 database `consta` (SQLite + FTS5). Migrations live in
+  `backend/migrations/`; apply locally with
+  `pnpm --filter @consta/backend exec wrangler d1 migrations apply consta --local`
+  and remotely with `--remote` before serving traffic.
+- `POST /identity/analysis` is idempotent per content hash: retrying the same
+  investigation updates the row instead of duplicating it. Claims without
+  sources are not saved.
+- Occupation portraits are deterministic pixel art (SVG, 24×24) cached in D1.
+  Compound occupations ("Doctor, politician and entrepreneur") reuse the first
+  role already stored; only when nothing matches does the backend generate and
+  save the primary role. Provider is switchable via `IMAGE_PROVIDER`
+  (`mock` locally, `openrouter` or `nvidia` in production).
 
-Ejemplo:
-
-```bash
-curl "http://localhost:8787/search?q=Aurora"
-curl "http://localhost:8787/entities/gt-nit%3A90000025"
-curl -X POST "http://localhost:8787/analyze" \
-  -H "Content-Type: application/json" \
-  -d '{"entityId":"gt-nit:90000025","depth":1}'
-```
-
-### Rutas del Channel GT
-
-```text
-GET /manifest
-GET /health
-GET /tools/search_entities?q=&limit=
-GET /tools/get_entity?id=
-GET /tools/get_relationships?id=
-GET /tools/get_evidence?ids=
-GET /tools/get_document?id=
-```
-
-El contrato completo está en `packages/contracts/src/types.ts`.
-
-## Datos y licencias
-
-| Fuente | Licencia | `commercial_ok` | ShareAlike |
-| --- | --- | --- | --- |
-| RGAE proveedores | CC BY-SA 4.0* | Sí | Sí |
-| RGAE representantes | CC BY-SA 4.0* | Sí | Sí |
-| Guatecompras OCDS | CC BY 4.0 | Sí | No |
-| Wikidata | CC0 | Sí | No |
-
-\* El metadata del dataset de RGAE indica “No se ha provisto de una licencia”;
-el footer del portal declara CC BY-SA 4.0. Consta adopta CC BY-SA 4.0 y registra
-la discrepancia en el manifest y en `/health`. Cada evidencia conserva su propia
-licencia y su `retrievedAt`; la base mixta no se presenta como una licencia única.
-
-El código de Consta es **AGPL-3.0-only**. Cada Channel mantiene su propia
-licencia de datos y muestra `commercial_ok`. Los datos de demostración son
-ficticios y no están cubiertos por las licencias de las fuentes reales.
-
-El detalle de descarga, checksums, cadencia y carga D1 está en
-`backendGTData/docs/SNAPSHOT.md`.
-
-## Build y deploy
+## Deploy
 
 ```bash
 pnpm typecheck
@@ -137,32 +103,18 @@ pnpm build
 # Frontend → Cloudflare Pages (out/)
 pnpm --filter @consta/frontend build
 
-# Analyzer y Channel GT → Cloudflare Workers
+# Backend → Cloudflare Workers (consta-api)
 pnpm deploy:api
-pnpm deploy:gt
 ```
 
-El frontend usa `output: "export"`, `trailingSlash: true` e imágenes sin
-optimización. En Pages configura `NEXT_PUBLIC_API_URL` con la URL pública del
-analyzer. En el analyzer configura `GT_DATA_URL` con la URL pública del Channel
-GT y `CORS_ORIGINS` con el dominio del frontend.
+- Backend secrets go in with `pnpm --filter @consta/backend run secrets`
+  (`wrangler secret put`) or the dashboard; non-secret vars live in
+  `backend/wrangler.jsonc`.
+- Pages needs `NEXT_PUBLIC_API_URL` pointing at the Worker, and the Worker's
+  `CORS_ORIGINS` must include the frontend origin.
 
-Los bindings D1/R2 están comentados en ambos `wrangler.jsonc` hasta que exista
-un snapshot cargado. Ver `backendGTData/README.md` para el proceso.
+## License
 
-## Estado
-
-- [x] Monorepo y contratos compartidos.
-- [x] Analyzer Hono con búsqueda, bundle, grafo, claims y expediente.
-- [x] Channel GT con contrato `channel/v1`, modo demo y adapters puros.
-- [x] Frontend Next.js con landing, workspace y registro de canales.
-- [x] Fallback demo y consumo opcional del Channel GT.
-- [ ] Snapshot real de RGAE/OCDS cargado en D1 (RGAE requiere descarga manual).
-- [ ] Ingesta programada, checksums y R2.
-- [ ] Auth, rate limiting y revisión legal de ShareAlike.
-- [ ] Dossier asistido por el modelo del evento.
-
-## Licencia
-
-Código: [AGPL-3.0-only](LICENSE). Datos: la licencia de cada fuente, visible en
-cada evidencia y en el manifest del Channel.
+Code: [AGPL-3.0-only](LICENSE). Demo data is fictitious and not covered by the
+licenses of real sources. Each piece of evidence keeps the license of its own
+source.
