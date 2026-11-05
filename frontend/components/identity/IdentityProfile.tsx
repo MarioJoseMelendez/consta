@@ -17,10 +17,13 @@ import {
 } from "@consta/contracts";
 import {
   isGeneratedOccupationImage,
+  occupationImageEventUrl,
+  occupationImageStreamUrl,
   occupationImageUrl,
   occupationPhotoPlaceholder,
   occupationText,
   shouldPollOccupationImage,
+  type OccupationImageEvent,
   type OccupationImageMeta,
 } from "@/lib/identity";
 
@@ -180,6 +183,9 @@ export function identityInitials(label: string): string {
 
 const OCCUPATION_IMAGE_POLL_MS = 1_200;
 const OCCUPATION_IMAGE_POLL_MAX = 24;
+/** El stream se reconecta solo mientras muse-image termina. */
+const OCCUPATION_IMAGE_STREAM_MAX_MS = 6 * 60 * 1000;
+const OCCUPATION_IMAGE_STREAM_OPEN_MS = 10_000;
 
 function isOccupationMeta(value: unknown): value is OccupationImageMeta {
   if (typeof value !== "object" || value === null) return false;
@@ -219,7 +225,9 @@ export function OccupationPhoto({
     if (!value) return;
 
     const controller = new AbortController();
-    void (async () => {
+
+    // Respaldo para navegadores sin EventSource o si el stream no abre.
+    const poll = async () => {
       for (let attempt = 0; attempt < OCCUPATION_IMAGE_POLL_MAX; attempt += 1) {
         if (controller.signal.aborted) return;
         try {
@@ -231,7 +239,7 @@ export function OccupationPhoto({
           const payload: unknown = await response.json();
           if (!isOccupationMeta(payload)) return;
           if (isGeneratedOccupationImage(payload)) {
-            setSrc(occupationImageUrl(value, { kind: "person" }));
+            setSrc(occupationImageEventUrl(value, payload));
             return;
           }
           if (!payload.pending) return;
@@ -242,9 +250,61 @@ export function OccupationPhoto({
           window.setTimeout(resolve, OCCUPATION_IMAGE_POLL_MS);
         });
       }
-    })();
+    };
 
-    return () => controller.abort();
+    if (typeof window === "undefined" || !("EventSource" in window)) {
+      void poll();
+      return () => controller.abort();
+    }
+
+    const source = new EventSource(
+      occupationImageStreamUrl(value, { kind: "person" }),
+    );
+    let settled = false;
+    let sawEvent = false;
+    let maxTimer = 0;
+    let openTimer = 0;
+
+    const closeSource = () => {
+      settled = true;
+      window.clearTimeout(maxTimer);
+      window.clearTimeout(openTimer);
+      source.close();
+    };
+
+    maxTimer = window.setTimeout(closeSource, OCCUPATION_IMAGE_STREAM_MAX_MS);
+    openTimer = window.setTimeout(() => {
+      if (sawEvent || settled) return;
+      // El endpoint no emitió nada: se usa el sondeo clásico.
+      closeSource();
+      void poll();
+    }, OCCUPATION_IMAGE_STREAM_OPEN_MS);
+
+    const markEvent = () => {
+      sawEvent = true;
+    };
+    source.addEventListener("template", markEvent);
+    source.addEventListener("pending", markEvent);
+    source.addEventListener("image", (event) => {
+      sawEvent = true;
+      try {
+        const payload = JSON.parse(
+          (event as MessageEvent<string>).data,
+        ) as OccupationImageEvent;
+        setSrc(occupationImageEventUrl(value, payload));
+      } catch {
+        // Si el evento no era JSON, la plantilla sigue visible.
+      }
+      closeSource();
+    });
+
+    return () => {
+      settled = true;
+      window.clearTimeout(maxTimer);
+      window.clearTimeout(openTimer);
+      source.close();
+      controller.abort();
+    };
   }, [kind, occupation, placeholderSrc]);
 
   if (failed) {

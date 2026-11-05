@@ -474,6 +474,45 @@ async function generateWithReapiTask(
   return null;
 }
 
+/**
+ * Versión para SSE: espera una ventana corta a que la imagen esté en D1 o a
+ * que ReAPI termine. Reutiliza la tarea persistida, así que las reconexiones
+ * del cliente no envían otra imagen. Devuelve null si sigue pendiente.
+ */
+export async function waitForOccupationImage(
+  db: D1Database | undefined,
+  env: GeneralEnv,
+  occupation: string,
+  options: { kind?: OccupationPhotoKind | string | null; windowMs?: number } = {},
+): Promise<ResolvedOccupationImage | null> {
+  if (!db) return null;
+  const kind = photoKindOf(options.kind, occupation);
+  const deadline = Date.now() + Math.max(0, options.windowMs ?? 25_000);
+  let generationStarted = false;
+
+  for (;;) {
+    const resolved = await resolveOccupationImage(db, env, occupation, { kind });
+    if (!resolved) return null;
+    if (resolved.cached) return resolved;
+    if (Date.now() >= deadline) return null;
+
+    if (!generationStarted) {
+      // Una sola ventana de ReAPI por conexión: las reconexiones del stream
+      // reanudan la misma tarea sin agotar los subrequests del Worker.
+      generationStarted = true;
+      const primary = primaryOccupation(occupation);
+      if (!primary) return null;
+      await generateOccupationImageIfMissing(db, env, primary);
+
+      const after = await resolveOccupationImage(db, env, occupation, { kind });
+      if (after?.cached) return after;
+    }
+
+    if (Date.now() >= deadline) return null;
+    await sleep(REAPI_POLL_INTERVAL_MS);
+  }
+}
+
 /** Detailed pixel-art brief used for the single image-model call. */
 export function occupationImagePrompt(occupation: string): string {
   const kind = occupationKind(occupation);

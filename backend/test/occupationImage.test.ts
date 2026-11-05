@@ -20,6 +20,7 @@ import {
   resetOccupationImageWork,
   resolveOccupationImage,
   shouldGenerateOccupationImage,
+  waitForOccupationImage,
 } from "../src/occupationImage.ts";
 
 type Handler = (input: string, init?: RequestInit) => Promise<Response> | Response;
@@ -513,4 +514,18 @@ test("solo se encolan ocupaciones de personas", () => {
     },
   ];
   assert.deepEqual(personOccupationsFromEntities(entities), ["Ingeniero"]);
+});
+
+test("el stream espera y devuelve la imagen en cuanto está en D1", async () => {
+  const { db, rows } = fakeOccupationDb();
+  const resolved = await waitForOccupationImage(
+    db,
+    { IMAGE_PROVIDER: "mock" },
+    "Abogada",
+    { windowMs: 2_000 },
+  );
+  assert.ok(resolved);
+  assert.equal(resolved?.cached, true);
+  assert.equal(resolved?.placeholder, null);
+  assert.equal(rows.get("abogada")?.provider, "mock");
 });

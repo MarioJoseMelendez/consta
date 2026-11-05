@@ -17,6 +17,7 @@ import type {
 } from "@consta/contracts";
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
+import { streamSSE } from "hono/streaming";
 import { buildAnalysisRun } from "./analyze";
 import { gtBaseUrl, gtGet } from "./gt";
 import {
@@ -34,6 +35,8 @@ import {
   photoKindOf,
   queueOccupationImages,
   resolveOccupationImage,
+  waitForOccupationImage,
+  type OccupationImageMeta,
 } from "./occupationImage";
 
 interface Bindings {
@@ -311,6 +314,7 @@ app.get("/", (c) =>
       "POST /identity/connections",
       "POST /identity/analysis",
       "GET /occupation-image?name=",
+      "GET /occupation-image/stream?name=",
     ],
   }),
 );
@@ -1001,6 +1005,16 @@ function occupationImageResponse(
   return new Response(image.bytes, { status: 200, headers });
 }
 
+function occupationImageEvent(meta: OccupationImageMeta): string {
+  return JSON.stringify({
+    occupation: meta.occupation,
+    cached: meta.cached,
+    pending: meta.pending,
+    placeholder: meta.placeholder,
+    v: Date.now(),
+  });
+}
+
 app.get("/occupation-image", async (c) => {
   const name = (c.req.query("name") ?? "").trim();
   if (!name) {
@@ -1035,6 +1049,74 @@ app.get("/occupation-image", async (c) => {
     return c.json(meta);
   }
   return occupationImageResponse(resolved.image, meta);
+});
+
+/**
+ * SSE de la foto: manda la plantilla al instante y luego la imagen cuando
+ * aparece en D1 o termina ReAPI. Cada conexión espera una ventana corta; si
+ * sigue pendiente, el navegador reconecta y reanuda la misma tarea guardada.
+ */
+app.get("/occupation-image/stream", async (c) => {
+  const name = (c.req.query("name") ?? "").trim();
+  if (!name) {
+    return c.json(apiError("missing_parameter", 'Se requiere "name".'), 400);
+  }
+  if (name.length > IDENTITY_NAME_MAX) {
+    return c.json(
+      apiError("invalid_parameter", `"name" no puede superar ${IDENTITY_NAME_MAX} caracteres.`),
+      400,
+    );
+  }
+
+  const kind = requestPhotoKind(name, c.req.query("kind"));
+  c.header("Cache-Control", "no-cache, no-transform");
+  c.header("X-Accel-Buffering", "no");
+
+  return streamSSE(c, async (stream) => {
+    const initial = await resolveOccupationImage(c.env.DB, c.env, name, { kind });
+    if (!initial) {
+      await stream.writeSSE({
+        event: "error",
+        data: JSON.stringify({
+          code: "invalid_parameter",
+          message: '"name" no contiene una ocupación válida.',
+        }),
+      });
+      return;
+    }
+
+    if (initial.cached) {
+      await stream.writeSSE({
+        event: "image",
+        data: occupationImageEvent(initial),
+      });
+      return;
+    }
+
+    await stream.writeSSE({
+      event: "template",
+      data: occupationImageEvent(initial),
+      retry: 1_500,
+    });
+
+    const ready = await waitForOccupationImage(c.env.DB, c.env, name, {
+      kind,
+      windowMs: 25_000,
+    });
+    if (ready) {
+      await stream.writeSSE({
+        event: "image",
+        data: occupationImageEvent(ready),
+      });
+      return;
+    }
+
+    await stream.writeSSE({
+      event: "pending",
+      data: JSON.stringify({ occupation: initial.occupation, v: Date.now() }),
+      retry: 1_500,
+    });
+  });
 });
 
 app.notFound((c) =>

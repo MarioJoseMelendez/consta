@@ -94,13 +94,16 @@ Details: [`frontend/README.md`](frontend/README.md).
   sources are not saved.
 - Occupation portraits are pixel art generated with reAPI's `muse-image` and
   cached in D1. The prompt asks for detailed 32-bit pixel art with hand-placed
-  square pixels, a limited palette and no aliasing. Compound occupations
-  ("Doctor, politician and entrepreneur") reuse the first role already stored;
-  only when nothing matches does the backend submit a generation for the
-  primary role. The task id is persisted, so a later request resumes the same
-  task instead of paying for a second image; there is one retry at most. Set
-  `REAPI_KEY` and keep `IMAGE_PROVIDER=reapi`, `IMAGE_MODEL=muse-image`;
-  `IMAGE_PROVIDER=mock` renders the local deterministic SVG.
+  square pixels, a limited palette and no aliasing. The frontend opens an SSE
+  stream that paints the `persona`/`empresa` template immediately, then swaps
+  to the portrait when a D1 match appears or the ReAPI task finishes. Compound
+  occupations ("Doctor, politician and entrepreneur") reuse the first role
+  already stored; only when nothing matches does the backend submit a
+  generation for the primary role. The task id is persisted, so a later
+  request resumes the same task instead of paying for a second image; there is
+  one retry at most. Set `REAPI_KEY` and keep `IMAGE_PROVIDER=reapi`,
+  `IMAGE_MODEL=muse-image`; `IMAGE_PROVIDER=mock` renders the local
+  deterministic SVG.
 
 ## Deploy
 

@@ -56,6 +56,7 @@ the `test/register.mjs` loader resolves extensionless relative imports to
 | `POST` | `/identity/connections` | One turn of the connection loop: `{ name, details?, interest?, investigation, candidateId, connection?, branchContext? }` → `{ claims, rounds, summary, canContinue, stoppedReason }`. |
 | `POST` | `/identity/analysis` | Persists an investigation to D1. Idempotent per content hash → `{ id, created, claims, entities }`. |
 | `GET` | `/occupation-image?name=` | Pixel art portrait for an occupation or the `persona`/`empresa` placeholder. `kind=person|enterprise`, `meta=1` for status. |
+| `GET` | `/occupation-image/stream?name=` | SSE: sends the template immediately, then the portrait as soon as it is in D1 or ReAPI finishes. |
 | `GET` | `/tools/search_entities?q=` | `SearchResponse` with demo entities. |
 | `GET` | `/search?q=` | Frontend alias of `/tools/search_entities`. |
 | `GET` | `/entities/:id` (and `/entity/:id`, `/tools/get_entity?id=`) | Demo `EntityBundle`. `404` if missing. |
@@ -228,6 +229,14 @@ immediately from cache and only generates when nothing is stored.
 - Two placeholders live in `occupation_images`: `persona` (generic portrait)
   and `empresa` (building). Companies and agencies never receive a generated
   portrait.
+- `GET /occupation-image/stream?name=` is the SSE path used by the frontend:
+  it emits `template` immediately (the persona or empresa placeholder), then
+  `image` when the occupation is found in D1 or the ReAPI task finishes.
+  muse-image itself has no partial-frame stream, so the stream carries our
+  states, not progressive pixels. Each connection waits one 25 s polling
+  window and closes with `pending`; the browser reconnects and resumes the
+  same stored task, which keeps a Worker invocation well under the subrequest
+  limit. `GET /occupation-image?meta=1` remains the polling fallback.
 - Compound occupations ("Doctor, politician and entrepreneur") are split into
   roles; the endpoint reuses the first role already cached. Only when nothing
   matches does it generate the primary role and store it under that key, so

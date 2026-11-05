@@ -64,6 +64,31 @@ export function occupationImageUrl(
   return `${API_BASE}/occupation-image?${params.toString()}`;
 }
 
+/** SSE que manda la plantilla y luego la imagen cuando está lista. */
+export function occupationImageStreamUrl(
+  occupation: string,
+  options?: { kind?: string | null },
+): string {
+  const params = new URLSearchParams({ name: occupation });
+  if (options?.kind) params.set("kind", options.kind);
+  return `${API_BASE}/occupation-image/stream?${params.toString()}`;
+}
+
+export interface OccupationImageEvent extends OccupationImageMeta {
+  /** Marca de tiempo para saltar la caché inmutable de la imagen final. */
+  v?: number;
+}
+
+/** URL de la imagen que anuncia el stream, con cache-buster si es nueva. */
+export function occupationImageEventUrl(
+  occupation: string,
+  event: OccupationImageEvent,
+): string {
+  if (event.placeholder) return occupationImageUrl(event.placeholder);
+  const url = occupationImageUrl(occupation);
+  return event.v ? `${url}&v=${event.v}` : url;
+}
+
 export function occupationPhotoPlaceholder(
   kind?: string | null,
 ): "persona" | "empresa" {
